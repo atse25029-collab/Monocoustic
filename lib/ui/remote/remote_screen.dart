@@ -356,6 +356,28 @@ class _RemoteScreenState extends State<RemoteScreen> with SingleTickerProviderSt
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                 child: Column(
                   children: [
+                    // Album Art
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(16),
+                      child: Image.network(
+                        'http://${client.host}:${client.port}/album-art',
+                        width: 120,
+                        height: 120,
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) => Container(
+                          width: 120,
+                          height: 120,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF161822),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: Colors.white10),
+                          ),
+                          child: const Icon(Icons.music_note, color: Colors.white24, size: 48),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+
                     // Song Title & Artist
                     Text(
                       song?.title ?? 'No Track Playing',
@@ -366,17 +388,19 @@ class _RemoteScreenState extends State<RemoteScreen> with SingleTickerProviderSt
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      song?.artist ?? 'Laptop Player',
+                      (song != null && song.album.isNotEmpty)
+                          ? '${song.artist} • ${song.album}'
+                          : (song?.artist ?? 'Laptop Player'),
                       textAlign: TextAlign.center,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontSize: 13, color: Colors.white54),
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 14),
 
                     // Live Synchronized Lyrics Area
                     Container(
-                      height: constraints.maxHeight * 0.42,
+                      height: constraints.maxHeight * 0.35,
                       decoration: BoxDecoration(
                         color: const Color(0xFF161822),
                         borderRadius: BorderRadius.circular(16),
@@ -534,7 +558,9 @@ class _RemoteScreenState extends State<RemoteScreen> with SingleTickerProviderSt
               ),
             ),
             subtitle: Text(
-              item.artist,
+              item.album.isNotEmpty ? '${item.artist} • ${item.album}' : item.artist,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontSize: 12, color: Colors.white38),
             ),
             trailing: item.lyrics.isNotEmpty

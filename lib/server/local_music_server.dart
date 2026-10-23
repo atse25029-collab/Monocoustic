@@ -157,6 +157,24 @@ class LocalMusicServer {
       return;
     }
 
+    if (path == '/album-art') {
+      final snapshot = getStateSnapshot?.call();
+      final artPath = snapshot?.currentSong?.albumArtPath;
+      if (artPath != null) {
+        final artFile = File(artPath);
+        if (await artFile.exists()) {
+          final isPng = artPath.toLowerCase().endsWith('.png');
+          request.response.headers.contentType = isPng ? ContentType('image', 'png') : ContentType('image', 'jpeg');
+          await request.response.addStream(artFile.openRead());
+          await request.response.close();
+          return;
+        }
+      }
+      request.response.statusCode = HttpStatus.notFound;
+      await request.response.close();
+      return;
+    }
+
     request.response.statusCode = HttpStatus.notFound;
     await request.response.close();
   }

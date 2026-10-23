@@ -41,7 +41,16 @@ class LrcParser {
       if (matches.isEmpty) continue;
 
       // Extract lyric text after the last timestamp match
-      final text = trimmed.substring(matches.last.end).trim();
+      var text = trimmed.substring(matches.last.end).trim();
+      // Clean HTML tags or entities if embedded
+      text = text.replaceAll(RegExp(r'<[^>]+>'), '');
+      text = text
+          .replaceAll('&nbsp;', ' ')
+          .replaceAll('&amp;', '&')
+          .replaceAll('&quot;', '"')
+          .replaceAll('&apos;', "'")
+          .replaceAll('&#39;', "'");
+      text = text.replaceAll(RegExp(r'[ \t]+'), ' ').trim();
 
       for (final match in matches) {
         final minutes = int.parse(match.group(1)!);

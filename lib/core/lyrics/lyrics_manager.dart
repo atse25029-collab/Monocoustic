@@ -5,10 +5,16 @@ import 'lrc_parser.dart';
 import 'smi_parser.dart';
 
 class LyricsManager {
-  /// Loads lyrics from file content or detects format based on extension.
+  /// Loads lyrics from file content or detects format based on extension/content.
   static List<LyricLine> parseContent(String content, {String? extension}) {
     final ext = extension?.toLowerCase();
-    if (ext == '.smi' || ext == '.sami' || content.contains('<SYNC') || content.contains('<SAMI>')) {
+    final lower = content.toLowerCase();
+
+    // If the content contains SAMI tags (<sami or <sync), even if the extension was .lrc, use SmiParser
+    if (ext == '.smi' ||
+        ext == '.sami' ||
+        lower.contains('<sync') ||
+        lower.contains('<sami')) {
       return SmiParser.parse(content);
     } else {
       return LrcParser.parse(content);
@@ -42,7 +48,7 @@ class LyricsManager {
       return parseContent(content, extension: p.extension(filePath));
     } catch (_) {
       // In case of non-UTF8 encoding (e.g. EUC-KR for Korean SMI files or Windows-1252),
-      // we can attempt latin1 fallback
+      // we attempt latin1 fallback
       try {
         final bytes = await file.readAsBytes();
         final content = String.fromCharCodes(bytes);

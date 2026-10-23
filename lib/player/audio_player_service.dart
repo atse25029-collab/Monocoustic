@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import '../core/lyrics/lyrics_manager.dart';
+import '../core/metadata/audio_metadata_reader.dart';
 import '../core/models/lyric_line.dart';
 import '../core/models/playback_state.dart';
 import '../core/models/remote_protocol.dart';
@@ -177,7 +179,7 @@ class AudioPlayerService extends ChangeNotifier {
     final List<Song> newSongs = [];
 
     for (final path in filePaths) {
-      final fileName = p.basenameWithoutExtension(path);
+      final metadata = await AudioMetadataReader.read(path);
       // Auto-detect companion .lrc or .smi file
       final lyricFile = await LyricsManager.findCompanionLyricFile(path);
       List<LyricLine> lyrics = [];
@@ -188,12 +190,13 @@ class AudioPlayerService extends ChangeNotifier {
       newSongs.add(
         Song(
           id: '${DateTime.now().microsecondsSinceEpoch}_${newSongs.length}',
-          title: fileName,
-          artist: 'Unknown Artist',
-          album: 'Local Music',
+          title: metadata.title,
+          artist: metadata.artist,
+          album: metadata.album,
           duration: Duration.zero,
           filePath: path,
           lyricPath: lyricFile,
+          albumArtPath: metadata.albumArtPath,
           lyrics: lyrics,
         ),
       );
@@ -207,6 +210,31 @@ class AudioPlayerService extends ChangeNotifier {
     } else {
       notifyListeners();
       _server.broadcastFullState(snapshot);
+    }
+  }
+
+  /// Scans a folder recursively and imports all detected audio files into the library
+  Future<void> addFolder(String folderPath) async {
+    final dir = Directory(folderPath);
+    if (!await dir.exists()) return;
+
+    final audioExtensions = {'.mp3', '.flac', '.wav', '.aac', '.ogg', '.m4a'};
+    final List<String> audioFiles = [];
+
+    try {
+      await for (final entity in dir.list(recursive: true, followLinks: false)) {
+        if (entity is File) {
+          final ext = p.extension(entity.path).toLowerCase();
+          if (audioExtensions.contains(ext)) {
+            audioFiles.add(entity.path);
+          }
+        }
+      }
+    } catch (_) {}
+
+    if (audioFiles.isNotEmpty) {
+      audioFiles.sort();
+      await addFiles(audioFiles);
     }
   }
 

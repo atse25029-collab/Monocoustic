@@ -15,20 +15,12 @@ class SmiParser {
     dotAll: true,
   );
 
-  /// HTML entities to replace
-  static final Map<String, String> _htmlEntities = {
-    '&nbsp;': ' ',
-    '&amp;': '&',
-    '&lt;': '<',
-    '&gt;': '>',
-    '&quot;': '"',
-    '&#39;': "'",
-    '&apos;': "'",
-  };
-
-  /// Clean HTML markup and decode basic entities.
+  /// Clean HTML markup and decode all entities (named, decimal, hex).
   static String cleanHtml(String html) {
     var text = html;
+
+    // Strip bracketed timestamps that some tools prepend (e.g. [00:15.00])
+    text = text.replaceAll(RegExp(r'\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]'), '');
 
     // Replace <br> and <br/> with space
     text = text.replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), ' ');
@@ -36,9 +28,25 @@ class SmiParser {
     // Strip all HTML tags
     text = text.replaceAll(RegExp(r'<[^>]+>'), '');
 
-    // Decode HTML entities
-    _htmlEntities.forEach((entity, replacement) {
-      text = text.replaceAll(RegExp(RegExp.escape(entity), caseSensitive: false), replacement);
+    // Common named entities
+    text = text
+        .replaceAll(RegExp(r'&nbsp;', caseSensitive: false), ' ')
+        .replaceAll(RegExp(r'&amp;', caseSensitive: false), '&')
+        .replaceAll(RegExp(r'&lt;', caseSensitive: false), '<')
+        .replaceAll(RegExp(r'&gt;', caseSensitive: false), '>')
+        .replaceAll(RegExp(r'&quot;', caseSensitive: false), '"')
+        .replaceAll(RegExp(r'&apos;', caseSensitive: false), "'");
+
+    // Decimal entities: &#39; &#34; etc.
+    text = text.replaceAllMapped(RegExp(r'&#(\d+);'), (match) {
+      final code = int.tryParse(match.group(1)!);
+      return code != null ? String.fromCharCode(code) : match.group(0)!;
+    });
+
+    // Hex entities: &#x27; etc.
+    text = text.replaceAllMapped(RegExp(r'&#x([0-9a-fA-F]+);'), (match) {
+      final code = int.tryParse(match.group(1)!, radix: 16);
+      return code != null ? String.fromCharCode(code) : match.group(0)!;
     });
 
     // Collapse multiple whitespace
@@ -51,8 +59,11 @@ class SmiParser {
   static List<LyricLine> parse(String content) {
     if (content.trim().isEmpty) return [];
 
+    // Strip line-prefixed bracketed timestamps first so they don't leak into slices
+    final sanitizedContent = content.replaceAll(RegExp(r'^\s*\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]\s*', multiLine: true), '');
+
     final List<LyricLine> result = [];
-    final syncMatches = _syncTagRegex.allMatches(content).toList();
+    final syncMatches = _syncTagRegex.allMatches(sanitizedContent).toList();
     if (syncMatches.isEmpty) return [];
 
     // Temporary map of timestamp_ms -> list of (class, text)
@@ -66,9 +77,9 @@ class SmiParser {
       final startIndex = currentMatch.end;
       final endIndex = (i + 1 < syncMatches.length)
           ? syncMatches[i + 1].start
-          : content.length;
+          : sanitizedContent.length;
 
-      final rawSlice = content.substring(startIndex, endIndex);
+      final rawSlice = sanitizedContent.substring(startIndex, endIndex);
 
       // Check if there are explicit <P Class=...> definitions
       final pMatches = _pClassRegex.allMatches(rawSlice).toList();
@@ -95,20 +106,26 @@ class SmiParser {
       final entries = entriesByTime[timeMs]!;
       if (entries.isEmpty) continue;
 
-      // Extract main text (first non-empty or first item)
-      final primary = entries.first;
-      String mainText = primary.text;
+      // Filter out entries that are purely empty or whitespace if non-empty entries exist at this timestamp
+      final nonEmptyEntries = entries.where((e) => e.text.trim().isNotEmpty).toList();
+
+      String mainText = '';
       String? translation;
 
-      if (entries.length > 1) {
-        // Look for alternate language class as translation
-        final nonPrimary = entries.skip(1).firstWhere(
-              (e) => e.text.isNotEmpty && e.text != mainText,
-              orElse: () => const _SmiEntry(className: '', text: ''),
-            );
-        if (nonPrimary.text.isNotEmpty) {
-          translation = nonPrimary.text;
+      if (nonEmptyEntries.isNotEmpty) {
+        mainText = nonEmptyEntries.first.text;
+        if (nonEmptyEntries.length > 1) {
+          final nonPrimary = nonEmptyEntries.skip(1).firstWhere(
+                (e) => e.text.isNotEmpty && e.text != mainText,
+                orElse: () => const _SmiEntry(className: '', text: ''),
+              );
+          if (nonPrimary.text.isNotEmpty) {
+            translation = nonPrimary.text;
+          }
         }
+      } else {
+        // All were empty/silence marker (e.g. &nbsp;)
+        mainText = '';
       }
 
       result.add(

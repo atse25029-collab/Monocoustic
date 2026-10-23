@@ -8,6 +8,7 @@ class Song {
   final Duration duration;
   final String filePath;
   final String? lyricPath;
+  final String? albumArtPath;
   final List<LyricLine> lyrics;
 
   const Song({
@@ -18,6 +19,7 @@ class Song {
     required this.duration,
     required this.filePath,
     this.lyricPath,
+    this.albumArtPath,
     this.lyrics = const [],
   });
 
@@ -29,6 +31,7 @@ class Song {
     Duration? duration,
     String? filePath,
     String? lyricPath,
+    String? albumArtPath,
     List<LyricLine>? lyrics,
   }) {
     return Song(
@@ -39,6 +42,7 @@ class Song {
       duration: duration ?? this.duration,
       filePath: filePath ?? this.filePath,
       lyricPath: lyricPath ?? this.lyricPath,
+      albumArtPath: albumArtPath ?? this.albumArtPath,
       lyrics: lyrics ?? this.lyrics,
     );
   }
@@ -52,6 +56,7 @@ class Song {
       'durationMs': duration.inMilliseconds,
       'filePath': filePath,
       'lyricPath': lyricPath,
+      'albumArtPath': albumArtPath,
       'lyrics': lyrics.map((l) => l.toJson()).toList(),
     };
   }
@@ -65,6 +70,7 @@ class Song {
       duration: Duration(milliseconds: json['durationMs'] as int? ?? 0),
       filePath: json['filePath'] as String? ?? '',
       lyricPath: json['lyricPath'] as String?,
+      albumArtPath: json['albumArtPath'] as String?,
       lyrics: (json['lyrics'] as List<dynamic>?)
               ?.map((e) => LyricLine.fromJson(e as Map<String, dynamic>))
               .toList() ??

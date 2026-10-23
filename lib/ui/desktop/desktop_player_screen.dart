@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -57,6 +58,15 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
       if (paths.isNotEmpty) {
         await player.addFiles(paths);
       }
+    }
+  }
+
+  Future<void> _pickFolder(AudioPlayerService player) async {
+    final folderPath = await FilePicker.getDirectoryPath(
+      dialogTitle: 'Select Music Folder',
+    );
+    if (folderPath != null && folderPath.isNotEmpty) {
+      await player.addFolder(folderPath);
     }
   }
 
@@ -169,16 +179,36 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
             const Divider(color: Colors.white12, height: 32),
 
             // Quick Actions
-            ElevatedButton.icon(
-              onPressed: () => _pickAudioFiles(player),
-              icon: const Icon(Icons.add, size: 18),
-              label: const Text('Add Songs'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Theme.of(context).colorScheme.primary,
-                foregroundColor: Colors.white,
-                minimumSize: const Size.fromHeight(42),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: () => _pickAudioFiles(player),
+                    icon: const Icon(Icons.music_note, size: 16),
+                    label: const Text('Add Files', style: TextStyle(fontSize: 12)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Theme.of(context).colorScheme.primary,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => _pickFolder(player),
+                    icon: const Icon(Icons.folder_open, size: 16),
+                    label: const Text('Add Folder', style: TextStyle(fontSize: 12)),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      side: const BorderSide(color: Colors.white24),
+                      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ),
+              ],
             ),
 
             const Spacer(),
@@ -277,14 +307,31 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
               style: TextStyle(fontSize: 13, color: Colors.white38),
             ),
             const SizedBox(height: 20),
-            ElevatedButton.icon(
-              onPressed: () => _pickAudioFiles(player),
-              icon: const Icon(Icons.folder_open),
-              label: const Text('Browse Files'),
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                ElevatedButton.icon(
+                  onPressed: () => _pickAudioFiles(player),
+                  icon: const Icon(Icons.music_note),
+                  label: const Text('Browse Files'),
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                OutlinedButton.icon(
+                  onPressed: () => _pickFolder(player),
+                  icon: const Icon(Icons.folder_open),
+                  label: const Text('Open Folder Library'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    side: const BorderSide(color: Colors.white38),
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -310,31 +357,83 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
                 : BorderSide.none,
           ),
           child: ListTile(
-            leading: IconButton(
-              icon: Icon(
-                isPlayingThis && player.isPlaying
-                    ? Icons.pause_circle_filled
-                    : Icons.play_circle_filled,
-                color: isPlayingThis ? Theme.of(context).colorScheme.primary : Colors.white70,
-                size: 32,
+            leading: SizedBox(
+              width: 44,
+              height: 44,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: item.albumArtPath != null
+                        ? Image.file(
+                            File(item.albumArtPath!),
+                            width: 44,
+                            height: 44,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) => Container(
+                              width: 44,
+                              height: 44,
+                              color: Colors.white10,
+                              child: const Icon(Icons.music_note, color: Colors.white38, size: 20),
+                            ),
+                          )
+                        : Container(
+                            width: 44,
+                            height: 44,
+                            decoration: BoxDecoration(
+                              color: Colors.white10,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Icon(Icons.music_note, color: Colors.white38, size: 20),
+                          ),
+                  ),
+                  Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: () {
+                        if (isPlayingThis) {
+                          player.togglePlay();
+                        } else {
+                          player.playAtIndex(index);
+                        }
+                      },
+                      child: Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: isPlayingThis
+                              ? Colors.black.withValues(alpha: 0.4)
+                              : Colors.black.withValues(alpha: 0.25),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(
+                          isPlayingThis && player.isPlaying
+                              ? Icons.pause_circle_filled
+                              : Icons.play_circle_filled,
+                          color: isPlayingThis ? Theme.of(context).colorScheme.primary : Colors.white,
+                          size: 28,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
-              onPressed: () {
-                if (isPlayingThis) {
-                  player.togglePlay();
-                } else {
-                  player.playAtIndex(index);
-                }
-              },
             ),
             title: Text(
               item.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 fontWeight: isPlayingThis ? FontWeight.bold : FontWeight.normal,
                 color: isPlayingThis ? Colors.white : Colors.white.withValues(alpha: 0.9),
               ),
             ),
             subtitle: Text(
-              item.artist,
+              item.album.isNotEmpty ? '${item.artist} • ${item.album}' : item.artist,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(fontSize: 12, color: Colors.white.withValues(alpha: 0.5)),
             ),
             trailing: Row(
@@ -407,16 +506,33 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
       child: Column(
         children: [
           const SizedBox(height: 24),
+          if (currentSong.albumArtPath != null) ...[
+            ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: Image.file(
+                File(currentSong.albumArtPath!),
+                width: 140,
+                height: 140,
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => const SizedBox.shrink(),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
           Text(
             currentSong.title,
+            textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white),
           ),
           const SizedBox(height: 4),
           Text(
-            currentSong.artist,
+            currentSong.album.isNotEmpty
+                ? '${currentSong.artist} • ${currentSong.album}'
+                : currentSong.artist,
+            textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 14, color: Colors.white54),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 12),
           Expanded(
             child: LyricsView(
               lyrics: currentSong.lyrics,
@@ -614,14 +730,30 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
             width: 200,
             child: Row(
               children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: Colors.white10,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Icon(Icons.music_note, color: Colors.white54, size: 22),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: song?.albumArtPath != null
+                      ? Image.file(
+                          File(song!.albumArtPath!),
+                          width: 44,
+                          height: 44,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => Container(
+                            width: 44,
+                            height: 44,
+                            color: Colors.white10,
+                            child: const Icon(Icons.music_note, color: Colors.white54, size: 22),
+                          ),
+                        )
+                      : Container(
+                          width: 44,
+                          height: 44,
+                          decoration: BoxDecoration(
+                            color: Colors.white10,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Icon(Icons.music_note, color: Colors.white54, size: 22),
+                        ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -637,7 +769,9 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        song?.artist ?? 'Select from library',
+                        song != null
+                            ? (song.album.isNotEmpty ? '${song.artist} • ${song.album}' : song.artist)
+                            : 'Select from library',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontSize: 11, color: Colors.white54),

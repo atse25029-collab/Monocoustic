@@ -89,6 +89,23 @@ void main() {
       expect(result[1].text, '감사합니다');
       expect(result[1].translation, 'Thank you');
     });
+
+    test('handles hybrid SAMI with bracketed timestamp prefixes and entity decoding', () {
+      const smi = '''
+[00:15.00] <SYNC Start=27011><P class='en1'>&nbsp;
+[00:15.00] <SYNC Start=27011><P class='en1'>&#9834; Having the time of your life &#9834;
+[00:16.00] <SYNC Start=30745><P class='en1'>See that girl, watch that scene
+[00:20.00] <SYNC Start=34873><P class='en1'>Dig in the dancing queen
+''';
+      final result = SmiParser.parse(smi);
+      expect(result.length, 3);
+      expect(result[0].timestamp.inMilliseconds, 27011);
+      expect(result[0].text, '♪ Having the time of your life ♪');
+      expect(result[1].timestamp.inMilliseconds, 30745);
+      expect(result[1].text, 'See that girl, watch that scene');
+      expect(result[2].timestamp.inMilliseconds, 34873);
+      expect(result[2].text, 'Dig in the dancing queen');
+    });
   });
 
   group('LyricsManager Active Index Lookup Tests', () {
