@@ -185,7 +185,9 @@ class LocalMusicServer {
     // Send initial full state immediately upon connection
     final snapshot = getStateSnapshot?.call();
     if (snapshot != null) {
-      socket.add(RemoteProtocol.encodeEvent(RemoteProtocol.evtFullState, snapshot.toJson()));
+      try {
+        socket.add(RemoteProtocol.encodeEvent(RemoteProtocol.evtFullState, snapshot.toJson()));
+      } catch (_) {}
     }
 
     socket.listen(
@@ -199,10 +201,12 @@ class LocalMusicServer {
             if (cmd == RemoteProtocol.cmdRequestSync) {
               final currentSnap = getStateSnapshot?.call();
               if (currentSnap != null) {
-                socket.add(RemoteProtocol.encodeEvent(
-                  RemoteProtocol.evtFullState,
-                  currentSnap.toJson(),
-                ));
+                try {
+                  socket.add(RemoteProtocol.encodeEvent(
+                    RemoteProtocol.evtFullState,
+                    currentSnap.toJson(),
+                  ));
+                } catch (_) {}
               }
             } else {
               onCommandReceived?.call(cmd, data);

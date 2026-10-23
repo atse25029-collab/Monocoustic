@@ -74,6 +74,18 @@ void main() {
       expect(lastReceivedCommand, RemoteProtocol.cmdTogglePlay);
     });
 
+    test('handles failed connection attempt and connects successfully on retry', () async {
+      // First attempt with closed/wrong port
+      await client.connect('127.0.0.1', port: 59999);
+      expect(client.isConnected, false);
+      expect(client.status, ConnectionStatus.error);
+
+      // Second attempt with valid server port in the same session
+      await client.connect('127.0.0.1', port: boundPort);
+      expect(client.isConnected, true);
+      expect(client.status, ConnectionStatus.connected);
+    });
+
     test('song and lyrics JSON serialization roundtrip', () {
       const song = Song(
         id: 's_1',

@@ -15,7 +15,7 @@ class RemoteScreen extends StatefulWidget {
 
 class _RemoteScreenState extends State<RemoteScreen> with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  final TextEditingController _ipController = TextEditingController(text: '10.83.223.201');
+  final TextEditingController _ipController = TextEditingController(text: '10.83.223.201:8080');
 
   @override
   void initState() {
@@ -27,8 +27,11 @@ class _RemoteScreenState extends State<RemoteScreen> with SingleTickerProviderSt
   Future<void> _loadSavedIp() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final saved = prefs.getString('saved_remote_ip');
+      var saved = prefs.getString('saved_remote_ip');
       if (saved != null && saved.isNotEmpty && mounted) {
+        if (!saved.contains(':')) {
+          saved = '$saved:8080';
+        }
         _ipController.text = saved;
       }
     } catch (_) {}
@@ -72,7 +75,7 @@ class _RemoteScreenState extends State<RemoteScreen> with SingleTickerProviderSt
                         final barcodes = capture.barcodes;
                         for (final barcode in barcodes) {
                           final raw = barcode.rawValue;
-                          if (raw != null && raw.isNotEmpty) {
+                          if (raw != null && raw.trim().isNotEmpty) {
                             Navigator.pop(ctx);
                             _handleScannedData(raw, client);
                             break;
@@ -107,14 +110,18 @@ class _RemoteScreenState extends State<RemoteScreen> with SingleTickerProviderSt
   }
 
   void _handleScannedData(String data, RemoteClientService client) {
-    // Expected format: http://10.83.223.201:8080 or 10.83.223.201:8080 or 10.83.223.201
-    String host = data.trim();
+    String raw = data.trim();
+    if (raw.isEmpty) return;
+
+    String host = raw;
     int port = 8080;
 
     if (host.startsWith('http://')) {
       host = host.substring(7);
     } else if (host.startsWith('https://')) {
       host = host.substring(8);
+    } else if (host.startsWith('ws://')) {
+      host = host.substring(5);
     }
 
     if (host.contains('/')) {
@@ -129,8 +136,9 @@ class _RemoteScreenState extends State<RemoteScreen> with SingleTickerProviderSt
     }
 
     if (host.isNotEmpty) {
-      _ipController.text = host;
-      _saveIp(host);
+      final fullAddress = '$host:$port';
+      _ipController.text = fullAddress;
+      _saveIp(fullAddress);
       client.connect(host, port: port);
     }
   }
@@ -369,8 +377,8 @@ class _RemoteScreenState extends State<RemoteScreen> with SingleTickerProviderSt
                 style: const TextStyle(color: Colors.white, fontFamily: 'monospace', fontSize: 16),
                 keyboardType: TextInputType.url,
                 decoration: InputDecoration(
-                  labelText: 'Laptop IP / Host',
-                  hintText: 'e.g. 10.83.223.201 or 192.168.1.15',
+                  labelText: 'Laptop IP & Port (ip:port)',
+                  hintText: '10.83.223.201:8080',
                   prefixIcon: const Icon(Icons.wifi, color: Colors.white38),
                   filled: true,
                   fillColor: Colors.black26,
@@ -408,52 +416,71 @@ class _RemoteScreenState extends State<RemoteScreen> with SingleTickerProviderSt
                   ),
                 ),
 
-              ElevatedButton.icon(
-                onPressed: isConnecting
-                    ? null
-                    : () {
-                        final text = _ipController.text.trim();
-                        if (text.isEmpty || text.endsWith('.')) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Please enter your laptop\'s full IP address from the screen (e.g. 10.83.223.201)'),
-                              backgroundColor: Colors.redAccent,
-                            ),
-                          );
-                          return;
-                        }
-                        _saveIp(text);
-                        client.connect(text);
-                      },
-                icon: isConnecting
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                      )
-                    : const Icon(Icons.login),
-                label: Text(isConnecting ? 'Connecting...' : 'Connect to Laptop'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Theme.of(context).colorScheme.primary,
-                  foregroundColor: Colors.white,
-                  minimumSize: const Size.fromHeight(50),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              if (isConnecting) ...[
+                ElevatedButton.icon(
+                  onPressed: null,
+                  icon: const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                  ),
+                  label: const Text('Connecting to Laptop...'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Theme.of(context).colorScheme.primary,
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size.fromHeight(50),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-
-              // QR Code Scanner Button
-              OutlinedButton.icon(
-                onPressed: () => _openQrScanner(context, client),
-                icon: const Icon(Icons.qr_code_scanner, size: 20),
-                label: const Text('Scan Laptop QR Code'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.white,
-                  side: const BorderSide(color: Colors.white24),
-                  minimumSize: const Size.fromHeight(50),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: client.disconnect,
+                  icon: const Icon(Icons.close, size: 16, color: Colors.redAccent),
+                  label: const Text('Cancel Connection', style: TextStyle(color: Colors.redAccent)),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Colors.redAccent),
+                    minimumSize: const Size.fromHeight(44),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
                 ),
-              ),
+              ] else ...[
+                ElevatedButton.icon(
+                  onPressed: () {
+                    final text = _ipController.text.trim();
+                    if (text.isEmpty || text.endsWith('.')) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Please enter your laptop\'s IP & port (e.g. 10.83.223.201:8080)'),
+                          backgroundColor: Colors.redAccent,
+                        ),
+                      );
+                      return;
+                    }
+                    _saveIp(text);
+                    client.connect(text);
+                  },
+                  icon: const Icon(Icons.login),
+                  label: const Text('Connect to Laptop'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Theme.of(context).colorScheme.primary,
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size.fromHeight(50),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: () => _openQrScanner(context, client),
+                  icon: const Icon(Icons.qr_code_scanner, size: 20),
+                  label: const Text('Scan Laptop QR Code'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    side: const BorderSide(color: Colors.white24),
+                    minimumSize: const Size.fromHeight(50),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
+              ],
             ],
           ),
         ),

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../core/models/playback_state.dart';
 import '../core/models/remote_protocol.dart';
@@ -9,6 +10,7 @@ enum ConnectionStatus { disconnected, connecting, connected, error }
 class RemoteClientService extends ChangeNotifier {
   WebSocketChannel? _channel;
   StreamSubscription? _subscription;
+  int _connectionAttemptId = 0;
 
   ConnectionStatus _status = ConnectionStatus.disconnected;
   String _host = '';
@@ -29,7 +31,10 @@ class RemoteClientService extends ChangeNotifier {
   int get sleepTimerMinutes => _sleepTimerMinutes;
 
   Future<void> connect(String ipOrHost, {int port = 8080}) async {
-    await disconnect();
+    final currentAttempt = ++_connectionAttemptId;
+
+    // Cleanly cancel and close prior attempts
+    await _forceCleanup();
 
     // Clean IP address input (in case user pasted http:// or :port)
     var cleanedHost = ipOrHost.trim();
@@ -60,35 +65,88 @@ class RemoteClientService extends ChangeNotifier {
 
     try {
       final uri = Uri.parse('ws://$_host:$_port/ws');
-      _channel = WebSocketChannel.connect(uri);
+      final channel = WebSocketChannel.connect(uri);
+      _channel = channel;
 
-      // Wait for the connection to establish or fail
-      await _channel!.ready;
-
-      _status = ConnectionStatus.connected;
-      notifyListeners();
-
-      _subscription = _channel!.stream.listen(
+      _subscription = channel.stream.listen(
         _handleIncomingMessage,
         onDone: () {
-          _status = ConnectionStatus.disconnected;
-          notifyListeners();
+          if (currentAttempt == _connectionAttemptId) {
+            _status = ConnectionStatus.disconnected;
+            _safeSetWakelock(false);
+            notifyListeners();
+          }
         },
         onError: (e) {
-          _status = ConnectionStatus.error;
-          _errorMessage = e.toString();
-          notifyListeners();
+          if (currentAttempt == _connectionAttemptId) {
+            _status = ConnectionStatus.error;
+            _errorMessage = 'Connection closed: $e';
+            _safeSetWakelock(false);
+            notifyListeners();
+          }
         },
         cancelOnError: true,
       );
 
+      // Timeout in 4.5 seconds so we never hang indefinitely on bad IPs
+      await channel.ready.timeout(const Duration(milliseconds: 4500));
+
+      // If another connect attempt started in the meantime, discard this one
+      if (currentAttempt != _connectionAttemptId) {
+        try {
+          await channel.sink.close();
+        } catch (_) {}
+        return;
+      }
+
+      _status = ConnectionStatus.connected;
+      _errorMessage = null;
+      notifyListeners();
+
+      // Enable wakelock when connected so connection isn't throttled in background
+      await _safeSetWakelock(true);
+
       // Request fresh state immediately
       sendCommand(RemoteProtocol.cmdRequestSync);
+    } on TimeoutException {
+      if (currentAttempt == _connectionAttemptId) {
+        await _forceCleanup();
+        _status = ConnectionStatus.error;
+        _errorMessage = 'Connection timed out to $_host:$_port. Please verify IP & port and ensure desktop player is running.';
+        await _safeSetWakelock(false);
+        notifyListeners();
+      }
     } catch (e) {
-      _status = ConnectionStatus.error;
-      _errorMessage = 'Failed to connect to $_host:$_port: $e';
-      notifyListeners();
+      if (currentAttempt == _connectionAttemptId) {
+        await _forceCleanup();
+        _status = ConnectionStatus.error;
+        _errorMessage = 'Could not connect to $_host:$_port ($e)';
+        await _safeSetWakelock(false);
+        notifyListeners();
+      }
     }
+  }
+
+  Future<void> _forceCleanup() async {
+    try {
+      await _subscription?.cancel();
+    } catch (_) {}
+    _subscription = null;
+
+    try {
+      await _channel?.sink.close();
+    } catch (_) {}
+    _channel = null;
+  }
+
+  Future<void> _safeSetWakelock(bool enable) async {
+    try {
+      if (enable) {
+        await WakelockPlus.enable();
+      } else {
+        await WakelockPlus.disable();
+      }
+    } catch (_) {}
   }
 
   void _handleIncomingMessage(dynamic raw) {
@@ -141,20 +199,18 @@ class RemoteClientService extends ChangeNotifier {
   }
 
   Future<void> disconnect() async {
-    await _subscription?.cancel();
-    _subscription = null;
-    await _channel?.sink.close();
-    _channel = null;
+    _connectionAttemptId++;
+    await _forceCleanup();
+    await _safeSetWakelock(false);
     _status = ConnectionStatus.disconnected;
+    _errorMessage = null;
     notifyListeners();
   }
 
   @override
   void dispose() {
-    _subscription?.cancel();
-    _subscription = null;
-    _channel?.sink.close();
-    _channel = null;
+    _forceCleanup();
+    _safeSetWakelock(false);
     super.dispose();
   }
 }
