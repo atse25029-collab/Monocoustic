@@ -13,7 +13,7 @@ class RemoteScreen extends StatefulWidget {
 
 class _RemoteScreenState extends State<RemoteScreen> with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  final TextEditingController _ipController = TextEditingController(text: '192.168.1.');
+  final TextEditingController _ipController = TextEditingController();
 
   @override
   void initState() {
@@ -190,16 +190,26 @@ class _RemoteScreenState extends State<RemoteScreen> with SingleTickerProviderSt
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  Icons.phone_android,
-                  size: 48,
-                  color: Theme.of(context).colorScheme.primary,
+              // Custom Unique App Icon
+              ClipRRect(
+                borderRadius: BorderRadius.circular(20),
+                child: Image.asset(
+                  'assets/logo.png',
+                  width: 80,
+                  height: 80,
+                  fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) => Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.graphic_eq,
+                      size: 48,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(height: 20),
@@ -213,7 +223,31 @@ class _RemoteScreenState extends State<RemoteScreen> with SingleTickerProviderSt
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 13, color: Colors.white54, height: 1.4),
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 20),
+
+              // Hotspot Tip banner
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blueAccent.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.blueAccent.withValues(alpha: 0.2)),
+                ),
+                child: const Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.wifi_tethering, size: 18, color: Colors.lightBlueAccent),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Using Phone Hotspot? Look for your laptop\'s Wi-Fi IP on screen (e.g. 10.83.223.201). Avoid virtual VMware/VPN IPs.',
+                        style: TextStyle(fontSize: 11, color: Colors.white70, height: 1.3),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
 
               // IP Input
               TextField(
@@ -222,7 +256,7 @@ class _RemoteScreenState extends State<RemoteScreen> with SingleTickerProviderSt
                 keyboardType: TextInputType.url,
                 decoration: InputDecoration(
                   labelText: 'Laptop IP / Host',
-                  hintText: 'e.g. 192.168.1.15',
+                  hintText: 'e.g. 10.83.223.201 or 192.168.1.15',
                   prefixIcon: const Icon(Icons.wifi, color: Colors.white38),
                   filled: true,
                   fillColor: Colors.black26,
@@ -264,9 +298,17 @@ class _RemoteScreenState extends State<RemoteScreen> with SingleTickerProviderSt
                 onPressed: isConnecting
                     ? null
                     : () {
-                        if (_ipController.text.trim().isNotEmpty) {
-                          client.connect(_ipController.text.trim());
+                        final text = _ipController.text.trim();
+                        if (text.isEmpty || text.endsWith('.')) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Please enter your laptop\'s full IP address from the screen (e.g. 10.83.223.201)'),
+                              backgroundColor: Colors.redAccent,
+                            ),
+                          );
+                          return;
                         }
+                        client.connect(text);
                       },
                 icon: isConnecting
                     ? const SizedBox(

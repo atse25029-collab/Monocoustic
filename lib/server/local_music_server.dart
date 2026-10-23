@@ -6,6 +6,18 @@ import '../core/models/remote_protocol.dart';
 
 typedef CommandHandler = void Function(String command, Map<String, dynamic>? data);
 
+class NetworkAddressInfo {
+  final String interfaceName;
+  final String ip;
+  final bool isVirtual;
+
+  const NetworkAddressInfo({
+    required this.interfaceName,
+    required this.ip,
+    this.isVirtual = false,
+  });
+}
+
 class LocalMusicServer {
   HttpServer? _server;
   final List<WebSocket> _clients = [];
@@ -45,9 +57,9 @@ class LocalMusicServer {
     _server = null;
   }
 
-  /// Retrieves list of valid local IPv4 LAN addresses (e.g. 192.168.x.x, 10.x.x.x)
-  static Future<List<String>> getLocalIpAddresses() async {
-    final List<String> ips = [];
+  /// Retrieves detailed network interface information, prioritizing physical Wi-Fi and Ethernet.
+  static Future<List<NetworkAddressInfo>> getDetailedNetworkInterfaces() async {
+    final List<NetworkAddressInfo> list = [];
     try {
       final interfaces = await NetworkInterface.list(
         type: InternetAddressType.IPv4,
@@ -55,18 +67,57 @@ class LocalMusicServer {
       );
 
       for (final interface in interfaces) {
+        final lowerName = interface.name.toLowerCase();
+        final isVirtual = lowerName.contains(
+          RegExp(r'vmware|virtual|vbox|vethernet|wsl|hyper-v|loopback|bluetooth|teredo|tap|vpn'),
+        );
+
         for (final addr in interface.addresses) {
-          if (!addr.isLoopback && !ips.contains(addr.address)) {
-            ips.add(addr.address);
+          if (!addr.isLoopback) {
+            list.add(
+              NetworkAddressInfo(
+                interfaceName: interface.name,
+                ip: addr.address,
+                isVirtual: isVirtual,
+              ),
+            );
           }
         }
       }
     } catch (_) {}
 
-    if (ips.isEmpty) {
-      ips.add('127.0.0.1');
+    // Sort:
+    // 1. Physical Wi-Fi/WLAN first (best for phone hotspot/home Wi-Fi)
+    // 2. Physical Ethernet
+    // 3. Other physical
+    // 4. Virtual adapters (VMware, WSL, etc.) last
+    list.sort((a, b) {
+      if (a.isVirtual != b.isVirtual) {
+        return a.isVirtual ? 1 : -1;
+      }
+      final aWifi = a.interfaceName.toLowerCase().contains(RegExp(r'wi-fi|wlan|wireless'));
+      final bWifi = b.interfaceName.toLowerCase().contains(RegExp(r'wi-fi|wlan|wireless'));
+      if (aWifi != bWifi) {
+        return aWifi ? -1 : 1;
+      }
+      return a.interfaceName.compareTo(b.interfaceName);
+    });
+
+    if (list.isEmpty) {
+      list.add(const NetworkAddressInfo(
+        interfaceName: 'Loopback',
+        ip: '127.0.0.1',
+        isVirtual: false,
+      ));
     }
-    return ips;
+
+    return list;
+  }
+
+  /// Retrieves list of valid local IPv4 LAN addresses with physical Wi-Fi prioritized at the top.
+  static Future<List<String>> getLocalIpAddresses() async {
+    final detailed = await getDetailedNetworkInterfaces();
+    return detailed.map((d) => d.ip).toList();
   }
 
   void _handleHttpRequest(HttpRequest request) async {

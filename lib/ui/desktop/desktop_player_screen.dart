@@ -17,7 +17,8 @@ class DesktopPlayerScreen extends StatefulWidget {
 
 class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
   int _selectedTab = 0; // 0: Library, 1: Lyrics, 2: Remote Pairing
-  List<String> _localIps = [];
+  List<NetworkAddressInfo> _networkInterfaces = [];
+  int _selectedInterfaceIndex = 0;
 
   @override
   void initState() {
@@ -26,10 +27,11 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
   }
 
   Future<void> _initLocalIps() async {
-    final ips = await LocalMusicServer.getLocalIpAddresses();
+    final ifaces = await LocalMusicServer.getDetailedNetworkInterfaces();
     if (mounted) {
       setState(() {
-        _localIps = ips;
+        _networkInterfaces = ifaces;
+        _selectedInterfaceIndex = 0;
       });
     }
   }
@@ -74,15 +76,19 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
   Widget build(BuildContext context) {
     final player = context.watch<AudioPlayerService>();
     final song = player.currentSong;
-    final primaryIp = _localIps.isNotEmpty ? _localIps.first : '127.0.0.1';
-    final serverUrl = 'http://$primaryIp:${player.server.port}';
+
+    final activeIp = (_networkInterfaces.isNotEmpty &&
+            _selectedInterfaceIndex < _networkInterfaces.length)
+        ? _networkInterfaces[_selectedInterfaceIndex].ip
+        : '127.0.0.1';
+    final serverUrl = 'http://$activeIp:${player.server.port}';
 
     return Scaffold(
       backgroundColor: const Color(0xFF121318),
       body: Row(
         children: [
           // Left Sidebar Navigation
-          _buildSidebar(player, primaryIp),
+          _buildSidebar(player, activeIp),
 
           // Main Center Area
           Expanded(
@@ -118,16 +124,25 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // App Header
+            // App Header with custom logo
             Row(
               children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.primary,
-                    borderRadius: BorderRadius.circular(10),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Image.asset(
+                    'assets/logo.png',
+                    width: 36,
+                    height: 36,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) => Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.primary,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(Icons.graphic_eq, color: Colors.white, size: 20),
+                    ),
                   ),
-                  child: const Icon(Icons.graphic_eq, color: Colors.white, size: 24),
                 ),
                 const SizedBox(width: 12),
                 const Expanded(
@@ -419,7 +434,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
       padding: const EdgeInsets.all(40),
       child: Center(
         child: Container(
-          constraints: const BoxConstraints(maxWidth: 620),
+          constraints: const BoxConstraints(maxWidth: 640),
           padding: const EdgeInsets.all(32),
           decoration: BoxDecoration(
             color: const Color(0xFF1A1D24),
@@ -437,11 +452,81 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
               ),
               const SizedBox(height: 8),
               const Text(
-                'Connect your Android phone to the same Wi-Fi network to control music, skip songs, adjust volume, and view real-time lyrics remotely.',
+                'Connect your Android phone to control playback, volume, and view real-time lyrics from your bed.',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 13, color: Colors.white54, height: 1.4),
               ),
-              const SizedBox(height: 28),
+              const SizedBox(height: 20),
+
+              // Network Interface Selector Chips
+              if (_networkInterfaces.length > 1) ...[
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Select Network Connection:',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white70),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: List.generate(_networkInterfaces.length, (idx) {
+                    final iface = _networkInterfaces[idx];
+                    final isSelected = _selectedInterfaceIndex == idx;
+                    final isWifi = iface.interfaceName.toLowerCase().contains(RegExp(r'wi-fi|wlan'));
+
+                    return ChoiceChip(
+                      selected: isSelected,
+                      selectedColor: Theme.of(context).colorScheme.primary,
+                      backgroundColor: Colors.white.withValues(alpha: 0.05),
+                      label: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            isWifi
+                                ? Icons.wifi
+                                : (iface.isVirtual ? Icons.computer : Icons.lan),
+                            size: 14,
+                            color: isSelected ? Colors.white : Colors.white60,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            '${iface.interfaceName} (${iface.ip})',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: isSelected ? Colors.white : Colors.white70,
+                              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                            ),
+                          ),
+                          if (isWifi && !iface.isVirtual) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.greenAccent.withValues(alpha: 0.2),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Text(
+                                'Hotspot/Wi-Fi',
+                                style: TextStyle(fontSize: 9, color: Colors.greenAccent, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                      onSelected: (selected) {
+                        if (selected) {
+                          setState(() {
+                            _selectedInterfaceIndex = idx;
+                          });
+                        }
+                      },
+                    );
+                  }),
+                ),
+                const SizedBox(height: 20),
+              ],
 
               // QR Code Container
               Container(
@@ -457,7 +542,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
                   backgroundColor: Colors.white,
                 ),
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 20),
 
               // Server URL Box
               Container(
@@ -484,21 +569,26 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
                   ],
                 ),
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 20),
 
               // Step-by-step instructions
-              const Align(
-                alignment: Alignment.centerLeft,
-                child: Column(
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.03),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white10),
+                ),
+                child: const Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('How to Connect:', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70)),
+                    Text('How to Connect with Phone Hotspot:', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white70)),
                     SizedBox(height: 8),
-                    Text('1. Install the Monocoustic Android APK on your phone.', style: TextStyle(color: Colors.white54, fontSize: 13)),
+                    Text('1. Connect your laptop to your phone\'s hotspot.', style: TextStyle(color: Colors.white54, fontSize: 13)),
                     SizedBox(height: 4),
-                    Text('2. Make sure your phone and laptop are on the same Wi-Fi.', style: TextStyle(color: Colors.white54, fontSize: 13)),
+                    Text('2. Make sure the Wi-Fi option is selected above (e.g. 10.83.223.201).', style: TextStyle(color: Colors.white54, fontSize: 13)),
                     SizedBox(height: 4),
-                    Text('3. Enter the IP shown above into the mobile app and tap "Connect"!', style: TextStyle(color: Colors.white54, fontSize: 13)),
+                    Text('3. On your phone app, enter that exact IP and tap "Connect to Laptop"!', style: TextStyle(color: Colors.white54, fontSize: 13)),
                   ],
                 ),
               ),
