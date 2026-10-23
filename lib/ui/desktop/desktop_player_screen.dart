@@ -1,8 +1,10 @@
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:window_manager/window_manager.dart';
 import '../../core/models/playback_state.dart';
 import '../../core/models/song.dart';
 import '../../player/audio_player_service.dart';
@@ -20,11 +22,32 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
   int _selectedTab = 0; // 0: Library, 1: Lyrics, 2: Remote Pairing
   List<NetworkAddressInfo> _networkInterfaces = [];
   int _selectedInterfaceIndex = 0;
+  bool _isFullScreen = false;
 
   @override
   void initState() {
     super.initState();
     _initLocalIps();
+    _checkInitialFullScreen();
+  }
+
+  Future<void> _checkInitialFullScreen() async {
+    try {
+      final fs = await windowManager.isFullScreen();
+      if (mounted) setState(() => _isFullScreen = fs);
+    } catch (_) {}
+  }
+
+  Future<void> _toggleFullScreen() async {
+    try {
+      final isFs = await windowManager.isFullScreen();
+      await windowManager.setFullScreen(!isFs);
+      if (mounted) {
+        setState(() {
+          _isFullScreen = !isFs;
+        });
+      }
+    } catch (_) {}
   }
 
   Future<void> _initLocalIps() async {
@@ -93,34 +116,47 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
         : '127.0.0.1';
     final serverUrl = 'http://$activeIp:${player.server.port}';
 
-    return Scaffold(
-      backgroundColor: const Color(0xFF121318),
-      body: Row(
-        children: [
-          // Left Sidebar Navigation
-          _buildSidebar(player, activeIp),
+    return CallbackShortcuts(
+      bindings: <ShortcutActivator, VoidCallback>{
+        const SingleActivator(LogicalKeyboardKey.f11): _toggleFullScreen,
+        const SingleActivator(LogicalKeyboardKey.escape): () async {
+          if (_isFullScreen) {
+            await _toggleFullScreen();
+          }
+        },
+      },
+      child: Focus(
+        autofocus: true,
+        child: Scaffold(
+          backgroundColor: const Color(0xFF121318),
+          body: Row(
+            children: [
+              // Left Sidebar Navigation
+              _buildSidebar(player, activeIp),
 
-          // Main Center Area
-          Expanded(
-            child: Column(
-              children: [
-                Expanded(
-                  child: IndexedStack(
-                    index: _selectedTab,
-                    children: [
-                      _buildLibraryView(player),
-                      _buildLyricsView(player),
-                      _buildRemotePairingView(player, serverUrl),
-                    ],
-                  ),
+              // Main Center Area
+              Expanded(
+                child: Column(
+                  children: [
+                    Expanded(
+                      child: IndexedStack(
+                        index: _selectedTab,
+                        children: [
+                          _buildLibraryView(player),
+                          _buildLyricsView(player),
+                          _buildRemotePairingView(player, serverUrl),
+                        ],
+                      ),
+                    ),
+
+                    // Bottom Persistent Player Bar
+                    _buildPlayerBar(player, song),
+                  ],
                 ),
-
-                // Bottom Persistent Player Bar
-                _buildPlayerBar(player, song),
-              ],
-            ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -338,10 +374,72 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
       );
     }
 
-    return ListView.builder(
-      padding: const EdgeInsets.all(24),
-      itemCount: player.queue.length,
-      itemBuilder: (context, index) {
+    return Column(
+      children: [
+        // Library Header Bar
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+          decoration: const BoxDecoration(
+            color: Color(0xFF161820),
+            border: Border(bottom: BorderSide(color: Colors.white10)),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Queue & Library (${player.queue.length} tracks)',
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.white),
+                    ),
+                    if (player.savedFolderPath != null)
+                      Text(
+                        'Saved Folder: ${player.savedFolderPath}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 11, color: Colors.white38),
+                      ),
+                  ],
+                ),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => _pickAudioFiles(player),
+                icon: const Icon(Icons.music_note, size: 14),
+                label: const Text('Add Files', style: TextStyle(fontSize: 11)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white70,
+                  side: const BorderSide(color: Colors.white24),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                ),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: () => _pickFolder(player),
+                icon: const Icon(Icons.folder_open, size: 14),
+                label: const Text('Change Folder', style: TextStyle(fontSize: 11)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white70,
+                  side: const BorderSide(color: Colors.white24),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                tooltip: 'Clear Library Queue',
+                icon: const Icon(Icons.delete_sweep_outlined, size: 20, color: Colors.white38),
+                onPressed: player.clearQueue,
+              ),
+            ],
+          ),
+        ),
+
+        // Tracks List
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.all(24),
+            itemCount: player.queue.length,
+            itemBuilder: (context, index) {
         final item = player.queue[index];
         final isPlayingThis = (index == player.currentIndex);
 
@@ -471,18 +569,16 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
                     label: const Text('Add Lyric', style: TextStyle(fontSize: 11)),
                     style: TextButton.styleFrom(foregroundColor: Colors.white54),
                   ),
-                const SizedBox(width: 12),
-                IconButton(
-                  icon: const Icon(Icons.close, size: 18, color: Colors.white30),
-                  onPressed: () => player.removeSong(index),
-                ),
               ],
             ),
           ),
         );
       },
-    );
-  }
+    ),
+  ),
+],
+);
+}
 
   Widget _buildLyricsView(AudioPlayerService player) {
     final currentSong = player.currentSong;
@@ -793,9 +889,10 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     IconButton(
+                      tooltip: player.isShuffle ? 'Shuffle: On' : 'Shuffle: Off',
                       icon: Icon(
                         Icons.shuffle,
-                        size: 18,
+                        size: 20,
                         color: player.isShuffle ? Theme.of(context).colorScheme.primary : Colors.white38,
                       ),
                       onPressed: player.toggleShuffle,
@@ -825,11 +922,16 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
                       onPressed: player.next,
                     ),
                     IconButton(
+                      tooltip: player.repeatMode == PlaybackRepeatMode.off
+                          ? 'Repeat: Off'
+                          : (player.repeatMode == PlaybackRepeatMode.all
+                              ? 'Repeat: All'
+                              : 'Repeat: Single Track'),
                       icon: Icon(
                         player.repeatMode == PlaybackRepeatMode.one
                             ? Icons.repeat_one
                             : Icons.repeat,
-                        size: 18,
+                        size: 20,
                         color: player.repeatMode != PlaybackRepeatMode.off
                             ? Theme.of(context).colorScheme.primary
                             : Colors.white38,
@@ -872,10 +974,19 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
 
           // Volume & Quick Actions
           SizedBox(
-            width: 195,
+            width: 235,
             child: Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
+                IconButton(
+                  tooltip: _isFullScreen ? 'Exit Full Screen (F11)' : 'Full Screen (F11)',
+                  icon: Icon(
+                    _isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
+                    size: 22,
+                    color: _isFullScreen ? Theme.of(context).colorScheme.primary : Colors.white60,
+                  ),
+                  onPressed: _toggleFullScreen,
+                ),
                 IconButton(
                   tooltip: 'Lyrics View',
                   icon: Icon(

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../client/remote_client_service.dart';
 import '../../core/models/playback_state.dart';
 import '../widgets/lyrics_view.dart';
@@ -13,12 +15,124 @@ class RemoteScreen extends StatefulWidget {
 
 class _RemoteScreenState extends State<RemoteScreen> with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  final TextEditingController _ipController = TextEditingController();
+  final TextEditingController _ipController = TextEditingController(text: '10.83.223.201');
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    _loadSavedIp();
+  }
+
+  Future<void> _loadSavedIp() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString('saved_remote_ip');
+      if (saved != null && saved.isNotEmpty && mounted) {
+        _ipController.text = saved;
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveIp(String ip) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('saved_remote_ip', ip);
+    } catch (_) {}
+  }
+
+  void _openQrScanner(BuildContext context, RemoteClientService client) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.black,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) {
+        return SizedBox(
+          height: MediaQuery.of(context).size.height * 0.75,
+          child: Column(
+            children: [
+              AppBar(
+                backgroundColor: Colors.transparent,
+                elevation: 0,
+                title: const Text('Scan Desktop QR Code', style: TextStyle(fontSize: 16)),
+                leading: IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(ctx),
+                ),
+              ),
+              Expanded(
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    MobileScanner(
+                      onDetect: (capture) {
+                        final barcodes = capture.barcodes;
+                        for (final barcode in barcodes) {
+                          final raw = barcode.rawValue;
+                          if (raw != null && raw.isNotEmpty) {
+                            Navigator.pop(ctx);
+                            _handleScannedData(raw, client);
+                            break;
+                          }
+                        }
+                      },
+                    ),
+                    Container(
+                      width: 240,
+                      height: 240,
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Theme.of(context).colorScheme.primary, width: 3),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.all(20),
+                child: Text(
+                  'Point your camera at the QR code on your laptop screen',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white70, fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _handleScannedData(String data, RemoteClientService client) {
+    // Expected format: http://10.83.223.201:8080 or 10.83.223.201:8080 or 10.83.223.201
+    String host = data.trim();
+    int port = 8080;
+
+    if (host.startsWith('http://')) {
+      host = host.substring(7);
+    } else if (host.startsWith('https://')) {
+      host = host.substring(8);
+    }
+
+    if (host.contains('/')) {
+      host = host.split('/').first;
+    }
+
+    if (host.contains(':')) {
+      final parts = host.split(':');
+      host = parts[0];
+      final p = int.tryParse(parts[1]);
+      if (p != null) port = p;
+    }
+
+    if (host.isNotEmpty) {
+      _ipController.text = host;
+      _saveIp(host);
+      client.connect(host, port: port);
+    }
   }
 
   @override
@@ -308,6 +422,7 @@ class _RemoteScreenState extends State<RemoteScreen> with SingleTickerProviderSt
                           );
                           return;
                         }
+                        _saveIp(text);
                         client.connect(text);
                       },
                 icon: isConnecting
@@ -321,6 +436,20 @@ class _RemoteScreenState extends State<RemoteScreen> with SingleTickerProviderSt
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Theme.of(context).colorScheme.primary,
                   foregroundColor: Colors.white,
+                  minimumSize: const Size.fromHeight(50),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // QR Code Scanner Button
+              OutlinedButton.icon(
+                onPressed: () => _openQrScanner(context, client),
+                icon: const Icon(Icons.qr_code_scanner, size: 20),
+                label: const Text('Scan Laptop QR Code'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  side: const BorderSide(color: Colors.white24),
                   minimumSize: const Size.fromHeight(50),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
@@ -450,6 +579,7 @@ class _RemoteScreenState extends State<RemoteScreen> with SingleTickerProviderSt
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
                         IconButton(
+                          tooltip: state.isShuffle ? 'Shuffle: On' : 'Shuffle: Off',
                           icon: Icon(
                             Icons.shuffle,
                             color: state.isShuffle ? Theme.of(context).colorScheme.primary : Colors.white38,
@@ -481,6 +611,11 @@ class _RemoteScreenState extends State<RemoteScreen> with SingleTickerProviderSt
                           onPressed: client.next,
                         ),
                         IconButton(
+                          tooltip: state.repeatMode == PlaybackRepeatMode.off
+                              ? 'Repeat: Off'
+                              : (state.repeatMode == PlaybackRepeatMode.all
+                                  ? 'Repeat: All'
+                                  : 'Repeat: Single Track'),
                           icon: Icon(
                             state.repeatMode == PlaybackRepeatMode.one ? Icons.repeat_one : Icons.repeat,
                             color: state.repeatMode != PlaybackRepeatMode.off ? Theme.of(context).colorScheme.primary : Colors.white38,

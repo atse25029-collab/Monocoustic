@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../core/lyrics/lyrics_manager.dart';
 import '../core/metadata/audio_metadata_reader.dart';
 import '../core/models/lyric_line.dart';
@@ -25,6 +26,8 @@ class AudioPlayerService extends ChangeNotifier {
   bool _isShuffle = false;
   PlaybackRepeatMode _repeatMode = PlaybackRepeatMode.off;
   int _currentLyricIndex = -1;
+  String? _savedFolderPath;
+  final List<int> _shufflePlayedIndices = [];
 
   // Sleep timer
   Timer? _sleepTimer;
@@ -57,6 +60,7 @@ class AudioPlayerService extends ChangeNotifier {
   LocalMusicServer get server => _server;
   int get sleepTimerRemainingSeconds => _sleepTimerRemainingSeconds;
   bool get isSleepTimerActive => _sleepTimer != null;
+  String? get savedFolderPath => _savedFolderPath;
 
   PlaybackStateSnapshot get snapshot => PlaybackStateSnapshot(
         currentSong: currentSong,
@@ -175,10 +179,11 @@ class AudioPlayerService extends ChangeNotifier {
     }
   }
 
-  Future<void> addFiles(List<String> filePaths) async {
+  Future<void> addFiles(List<String> filePaths, {bool autoPlay = true}) async {
     final List<Song> newSongs = [];
 
     for (final path in filePaths) {
+      if (_queue.any((s) => s.filePath == path)) continue;
       final metadata = await AudioMetadataReader.read(path);
       // Auto-detect companion .lrc or .smi file
       final lyricFile = await LyricsManager.findCompanionLyricFile(path);
@@ -204,19 +209,29 @@ class AudioPlayerService extends ChangeNotifier {
 
     _queue.addAll(newSongs);
 
-    // If queue was empty, play first song
-    if (_currentIndex == -1 && _queue.isNotEmpty) {
+    // If queue was empty, play first song only if autoPlay is requested
+    if (autoPlay && _currentIndex == -1 && _queue.isNotEmpty) {
       await playAtIndex(0);
     } else {
+      if (_currentIndex == -1 && _queue.isNotEmpty) {
+        _currentIndex = 0;
+      }
       notifyListeners();
       _server.broadcastFullState(snapshot);
     }
   }
 
-  /// Scans a folder recursively and imports all detected audio files into the library
-  Future<void> addFolder(String folderPath) async {
+  /// Scans a folder recursively and imports all detected audio files into the library.
+  /// Automatically persists the chosen folder path across app restarts.
+  Future<void> addFolder(String folderPath, {bool autoPlay = false, bool clearExisting = false}) async {
     final dir = Directory(folderPath);
     if (!await dir.exists()) return;
+
+    _savedFolderPath = folderPath;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('saved_music_folder', folderPath);
+    } catch (_) {}
 
     final audioExtensions = {'.mp3', '.flac', '.wav', '.aac', '.ogg', '.m4a'};
     final List<String> audioFiles = [];
@@ -234,8 +249,28 @@ class AudioPlayerService extends ChangeNotifier {
 
     if (audioFiles.isNotEmpty) {
       audioFiles.sort();
-      await addFiles(audioFiles);
+      if (clearExisting) {
+        _queue.clear();
+        _currentIndex = -1;
+        _shufflePlayedIndices.clear();
+      }
+      await addFiles(audioFiles, autoPlay: autoPlay);
     }
+  }
+
+  /// Restores the previously selected music folder on app launch
+  Future<void> restoreSavedLibrary() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString('saved_music_folder');
+      if (saved != null && saved.isNotEmpty) {
+        final dir = Directory(saved);
+        if (await dir.exists()) {
+          _savedFolderPath = saved;
+          await addFolder(saved, autoPlay: false, clearExisting: true);
+        }
+      }
+    } catch (_) {}
   }
 
   Future<void> setCustomLyrics(int songIndex, String lyricFilePath) async {
@@ -308,8 +343,31 @@ class AudioPlayerService extends ChangeNotifier {
   Future<void> next() async {
     if (_queue.isEmpty) return;
 
-    if (_isShuffle) {
-      final nextIdx = Random().nextInt(_queue.length);
+    // Shuffle playback: picks unplayed tracks in queue
+    if (_isShuffle && _queue.length > 1) {
+      if (!_shufflePlayedIndices.contains(_currentIndex) && _currentIndex >= 0) {
+        _shufflePlayedIndices.add(_currentIndex);
+      }
+      if (_shufflePlayedIndices.length >= _queue.length) {
+        _shufflePlayedIndices.clear();
+        if (_repeatMode == PlaybackRepeatMode.off) {
+          await _player.stop();
+          _isPlaying = false;
+          _position = Duration.zero;
+          notifyListeners();
+          _server.broadcastFullState(snapshot);
+          return;
+        }
+      }
+
+      final unplayed = List<int>.generate(_queue.length, (i) => i)
+          .where((i) => !_shufflePlayedIndices.contains(i))
+          .toList();
+
+      final nextIdx = unplayed.isNotEmpty
+          ? unplayed[Random().nextInt(unplayed.length)]
+          : Random().nextInt(_queue.length);
+
       await playAtIndex(nextIdx);
       return;
     }
@@ -321,6 +379,7 @@ class AudioPlayerService extends ChangeNotifier {
     } else {
       await _player.stop();
       _isPlaying = false;
+      _position = Duration.zero;
       notifyListeners();
       _server.broadcastFullState(snapshot);
     }
@@ -371,6 +430,7 @@ class AudioPlayerService extends ChangeNotifier {
 
   void toggleShuffle() {
     _isShuffle = !_isShuffle;
+    _shufflePlayedIndices.clear();
     notifyListeners();
     _server.broadcastFullState(snapshot);
   }

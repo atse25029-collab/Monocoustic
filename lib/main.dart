@@ -2,6 +2,7 @@ import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:window_manager/window_manager.dart';
 
 import 'client/remote_client_service.dart';
 import 'player/audio_player_service.dart';
@@ -11,12 +12,29 @@ import 'ui/remote/remote_screen.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  final isDesktop = !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
+
+  if (isDesktop) {
+    await windowManager.ensureInitialized();
+    const windowOptions = WindowOptions(
+      size: Size(1280, 800),
+      minimumSize: Size(960, 600),
+      center: true,
+      title: 'Monocoustic',
+    );
+    windowManager.waitUntilReadyToShow(windowOptions, () async {
+      await windowManager.show();
+      await windowManager.focus();
+    });
+  }
+
   final audioPlayerService = AudioPlayerService();
   final remoteClientService = RemoteClientService();
 
-  // If running on desktop, automatically start the local remote-control server
-  if (!kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
+  // If running on desktop, automatically start the local remote-control server & restore music library
+  if (isDesktop) {
     await audioPlayerService.startServer(port: 8080);
+    audioPlayerService.restoreSavedLibrary();
   }
 
   runApp(
