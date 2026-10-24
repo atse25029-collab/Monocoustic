@@ -574,39 +574,6 @@ class _RemoteScreenState extends State<RemoteScreen> with SingleTickerProviderSt
                     ),
                     const SizedBox(height: 14),
 
-                    // Prominent Timeframe and Remaining time indicator
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3)),
-                            ),
-                            child: Text(
-                              'Time: ${_formatDuration(state.position)} / ${_formatDuration(state.duration)}',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontFamily: 'monospace',
-                                fontWeight: FontWeight.bold,
-                                color: Theme.of(context).colorScheme.primary,
-                              ),
-                            ),
-                          ),
-                          if (state.duration > state.position)
-                            Text(
-                              '-${_formatDuration(state.duration - state.position)}',
-                              style: const TextStyle(fontSize: 12, fontFamily: 'monospace', color: Colors.white54),
-                            ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-
                     // Progress bar & Timestamps
                     Row(
                       children: [

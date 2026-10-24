@@ -40,6 +40,7 @@ class AudioPlayerService extends ChangeNotifier {
   StreamSubscription? _stateSub;
   StreamSubscription? _completeSub;
   Timer? _positionPollingTimer;
+  DateTime? _lastPositionSaveTime;
 
   AudioPlayerService() {
     _initAudioPlayer();
@@ -151,6 +152,12 @@ class AudioPlayerService extends ChangeNotifier {
           }
           _server.broadcastPosition(pos.inMilliseconds, _currentLyricIndex);
           notifyListeners();
+
+          final now = DateTime.now();
+          if (_lastPositionSaveTime == null || now.difference(_lastPositionSaveTime!).inSeconds >= 2) {
+            _lastPositionSaveTime = now;
+            _persistPosition();
+          }
         }
       } catch (_) {}
     });
@@ -268,6 +275,7 @@ class AudioPlayerService extends ChangeNotifier {
       notifyListeners();
       _server.broadcastFullState(snapshot);
     }
+    saveSessionState();
   }
 
   /// Scans a folder recursively and imports all detected audio files into the library.
@@ -307,19 +315,161 @@ class AudioPlayerService extends ChangeNotifier {
     }
   }
 
-  /// Restores the previously selected music folder on app launch
-  Future<void> restoreSavedLibrary() async {
+  /// Fast non-blocking position saver during playback
+  Future<void> _persistPosition() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final saved = prefs.getString('saved_music_folder');
-      if (saved != null && saved.isNotEmpty) {
-        final dir = Directory(saved);
-        if (await dir.exists()) {
-          _savedFolderPath = saved;
-          await addFolder(saved, autoPlay: false, clearExisting: true);
-        }
+      await prefs.setInt('last_playback_position_ms', _position.inMilliseconds);
+      if (currentSong != null) {
+        await prefs.setString('last_played_song_path', currentSong!.filePath);
+        await prefs.setInt('last_played_song_index', _currentIndex);
       }
     } catch (_) {}
+  }
+
+  /// Full session state saver called on setting changes, pause, stop, track switch, and window exit
+  Future<void> saveSessionState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (_savedFolderPath != null) {
+        await prefs.setString('saved_music_folder', _savedFolderPath!);
+      }
+      if (_queue.isNotEmpty) {
+        await prefs.setStringList('saved_queue_paths', _queue.map((s) => s.filePath).toList());
+      }
+      if (currentSong != null) {
+        await prefs.setString('last_played_song_path', currentSong!.filePath);
+        await prefs.setInt('last_played_song_index', _currentIndex);
+      }
+      await prefs.setInt('last_playback_position_ms', _position.inMilliseconds);
+      await prefs.setDouble('last_volume', _volume);
+      await prefs.setBool('last_is_shuffle', _isShuffle);
+      await prefs.setString('last_repeat_mode', _repeatMode.name);
+    } catch (_) {}
+  }
+
+  /// Prepares a track from previous session: loads companion lyrics, metadata,
+  /// sets player source and positions the seekhead without automatically starting playback.
+  Future<void> prepareSongAtIndex(int index, {Duration initialPosition = Duration.zero}) async {
+    if (index < 0 || index >= _queue.length) return;
+    _currentIndex = index;
+    _currentLyricIndex = -1;
+    _position = initialPosition;
+    _isPlaying = false;
+
+    final song = _queue[index];
+
+    // Load companion lyric if not loaded yet
+    if (song.lyrics.isEmpty) {
+      final companionLyric = await LyricsManager.findCompanionLyricFile(song.filePath);
+      if (companionLyric != null) {
+        final parsedLyrics = await LyricsManager.loadFromFile(companionLyric);
+        _queue[index] = song.copyWith(lyricPath: companionLyric, lyrics: parsedLyrics);
+      }
+    }
+
+    if (song.duration > Duration.zero) {
+      _duration = song.duration;
+    }
+
+    final activeSong = _queue[index];
+    if (activeSong.lyrics.isNotEmpty) {
+      _currentLyricIndex = LyricsManager.findActiveIndex(activeSong.lyrics, initialPosition);
+    }
+
+    try {
+      await _player.setSource(DeviceFileSource(song.filePath));
+      if (initialPosition > Duration.zero) {
+        await _player.seek(initialPosition);
+      }
+      final d = await _player.getDuration();
+      if (d != null && d > Duration.zero) {
+        _duration = d;
+      }
+    } catch (e) {
+      debugPrint('Error preparing song source: $e');
+    }
+
+    notifyListeners();
+    _server.broadcastFullState(snapshot);
+  }
+
+  /// Completely restores all settings, library/queue, last played song, and exact timeframe from last session
+  Future<void> restoreSavedSession() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      // 1. Restore Volume, Shuffle, Repeat Mode
+      if (prefs.containsKey('last_volume')) {
+        _volume = prefs.getDouble('last_volume')!.clamp(0.0, 1.0);
+        await _player.setVolume(_volume);
+      }
+      if (prefs.containsKey('last_is_shuffle')) {
+        _isShuffle = prefs.getBool('last_is_shuffle') ?? false;
+      }
+      if (prefs.containsKey('last_repeat_mode')) {
+        final rName = prefs.getString('last_repeat_mode');
+        _repeatMode = PlaybackRepeatMode.values.firstWhere(
+          (m) => m.name == rName,
+          orElse: () => PlaybackRepeatMode.off,
+        );
+      }
+
+      // 2. Restore library / folder / files
+      final savedFolder = prefs.getString('saved_music_folder');
+      final savedQueuePaths = prefs.getStringList('saved_queue_paths');
+
+      if (savedFolder != null && savedFolder.isNotEmpty && await Directory(savedFolder).exists()) {
+        _savedFolderPath = savedFolder;
+        await addFolder(savedFolder, autoPlay: false, clearExisting: true);
+      } else if (savedQueuePaths != null && savedQueuePaths.isNotEmpty) {
+        final validPaths = savedQueuePaths.where((p) => File(p).existsSync()).toList();
+        if (validPaths.isNotEmpty) {
+          await addFiles(validPaths, autoPlay: false);
+        }
+      }
+
+      // 3. Restore last played track and exact timeframe
+      final lastSongPath = prefs.getString('last_played_song_path');
+      final lastPositionMs = prefs.getInt('last_playback_position_ms') ?? 0;
+
+      if (_queue.isNotEmpty) {
+        int targetIndex = -1;
+        if (lastSongPath != null && lastSongPath.isNotEmpty) {
+          targetIndex = _queue.indexWhere((s) => s.filePath == lastSongPath);
+          if (targetIndex == -1) {
+            final lastFilename = p.basename(lastSongPath);
+            targetIndex = _queue.indexWhere((s) => p.basename(s.filePath) == lastFilename);
+          }
+        }
+
+        if (targetIndex == -1) {
+          final lastIdx = prefs.getInt('last_played_song_index') ?? 0;
+          if (lastIdx >= 0 && lastIdx < _queue.length) {
+            targetIndex = lastIdx;
+          } else {
+            targetIndex = 0;
+          }
+        }
+
+        if (targetIndex >= 0 && targetIndex < _queue.length) {
+          await prepareSongAtIndex(
+            targetIndex,
+            initialPosition: Duration(milliseconds: lastPositionMs),
+          );
+        }
+      }
+
+      notifyListeners();
+      _server.broadcastFullState(snapshot);
+    } catch (e) {
+      debugPrint('Error restoring saved session: $e');
+    }
+  }
+
+  /// Backward compatible alias for restoreSavedSession
+  Future<void> restoreSavedLibrary() async {
+    await restoreSavedSession();
   }
 
   Future<void> setCustomLyrics(int songIndex, String lyricFilePath) async {
@@ -361,6 +511,7 @@ class AudioPlayerService extends ChangeNotifier {
 
     notifyListeners();
     _server.broadcastFullState(snapshot);
+    saveSessionState();
   }
 
   Future<void> togglePlay() async {
@@ -376,11 +527,24 @@ class AudioPlayerService extends ChangeNotifier {
     _isPlaying = false;
     notifyListeners();
     _server.broadcastFullState(snapshot);
+    saveSessionState();
   }
 
   Future<void> resume() async {
     if (_currentIndex == -1 && _queue.isNotEmpty) {
       await playAtIndex(0);
+      return;
+    }
+    final song = currentSong;
+    if (song != null) {
+      try {
+        await _player.resume();
+      } catch (_) {
+        await _player.play(DeviceFileSource(song.filePath), position: _position);
+      }
+      _isPlaying = true;
+      notifyListeners();
+      _server.broadcastFullState(snapshot);
       return;
     }
     await _player.resume();
@@ -461,6 +625,7 @@ class AudioPlayerService extends ChangeNotifier {
     }
     notifyListeners();
     _server.broadcastPosition(target.inMilliseconds, _currentLyricIndex);
+    _persistPosition();
   }
 
   void seekToLyricLine(int lineIndex) {
@@ -478,16 +643,18 @@ class AudioPlayerService extends ChangeNotifier {
     }
     notifyListeners();
     _server.broadcastVolume(_volume);
+    await saveSessionState();
   }
 
-  void toggleShuffle() {
+  Future<void> toggleShuffle() async {
     _isShuffle = !_isShuffle;
     _shufflePlayedIndices.clear();
     notifyListeners();
     _server.broadcastFullState(snapshot);
+    await saveSessionState();
   }
 
-  void toggleRepeat() {
+  Future<void> toggleRepeat() async {
     switch (_repeatMode) {
       case PlaybackRepeatMode.off:
         _repeatMode = PlaybackRepeatMode.all;
@@ -501,6 +668,7 @@ class AudioPlayerService extends ChangeNotifier {
     }
     notifyListeners();
     _server.broadcastFullState(snapshot);
+    await saveSessionState();
   }
 
   void removeSong(int index) {
@@ -519,6 +687,7 @@ class AudioPlayerService extends ChangeNotifier {
     }
     notifyListeners();
     _server.broadcastFullState(snapshot);
+    saveSessionState();
   }
 
   void clearQueue() {
@@ -529,6 +698,7 @@ class AudioPlayerService extends ChangeNotifier {
     _player.stop();
     notifyListeners();
     _server.broadcastFullState(snapshot);
+    saveSessionState();
   }
 
   void _handleTrackCompleted() {

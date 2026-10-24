@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:window_manager/window_manager.dart';
 import '../../core/models/playback_state.dart';
 import '../../core/models/song.dart';
@@ -18,26 +19,70 @@ class DesktopPlayerScreen extends StatefulWidget {
   State<DesktopPlayerScreen> createState() => _DesktopPlayerScreenState();
 }
 
-class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> with WindowListener {
+class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> with WindowListener, WidgetsBindingObserver {
   int _selectedTab = 0; // 0: Library, 1: Lyrics, 2: Remote Pairing
   List<NetworkAddressInfo> _networkInterfaces = [];
   int _selectedInterfaceIndex = 0;
   bool _isFullScreen = false;
+  bool _wasMaximizedBeforeFullScreen = false;
 
   @override
   void initState() {
     super.initState();
     windowManager.addListener(this);
+    WidgetsBinding.instance.addObserver(this);
     HardwareKeyboard.instance.addHandler(_handleGlobalKeyEvent);
     _initLocalIps();
     _checkInitialFullScreen();
+    _restoreSavedTab();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     HardwareKeyboard.instance.removeHandler(_handleGlobalKeyEvent);
     windowManager.removeListener(this);
     super.dispose();
+  }
+
+  Future<void> _restoreSavedTab() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final tab = prefs.getInt('last_selected_tab') ?? 0;
+      if (mounted && tab >= 0 && tab <= 2) {
+        setState(() => _selectedTab = tab);
+      }
+    } catch (_) {}
+  }
+
+  void _switchTab(int index) {
+    if (mounted) {
+      setState(() => _selectedTab = index);
+      SharedPreferences.getInstance().then((prefs) {
+        prefs.setInt('last_selected_tab', index);
+      });
+    }
+  }
+
+  @override
+  void onWindowClose() async {
+    try {
+      final player = context.read<AudioPlayerService>();
+      await player.saveSessionState();
+    } catch (_) {}
+    super.onWindowClose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached ||
+        state == AppLifecycleState.inactive) {
+      try {
+        final player = context.read<AudioPlayerService>();
+        player.saveSessionState();
+      } catch (_) {}
+    }
   }
 
   bool _handleGlobalKeyEvent(KeyEvent event) {
@@ -73,14 +118,31 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> with WindowLi
   Future<void> _toggleFullScreen() async {
     try {
       final isFs = await windowManager.isFullScreen();
-      await windowManager.setFullScreen(!isFs);
+      if (!isFs) {
+        _wasMaximizedBeforeFullScreen = await windowManager.isMaximized();
+        if (_wasMaximizedBeforeFullScreen) {
+          await windowManager.unmaximize();
+          await Future.delayed(const Duration(milliseconds: 60));
+        }
+        await windowManager.setTitleBarStyle(TitleBarStyle.hidden);
+        await windowManager.setFullScreen(true);
+      } else {
+        await windowManager.setFullScreen(false);
+        await windowManager.setTitleBarStyle(TitleBarStyle.normal);
+        if (_wasMaximizedBeforeFullScreen) {
+          await Future.delayed(const Duration(milliseconds: 60));
+          await windowManager.maximize();
+        }
+      }
       final newFs = await windowManager.isFullScreen();
       if (mounted) {
         setState(() {
           _isFullScreen = newFs;
         });
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Error toggling full screen: $e');
+    }
   }
 
   Future<void> _initLocalIps() async {
@@ -162,69 +224,32 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> with WindowLi
         autofocus: true,
         child: Scaffold(
           backgroundColor: const Color(0xFF121318),
-          body: Stack(
+          body: Row(
             children: [
-              Row(
-                children: [
-                  // Left Sidebar Navigation (hidden in lyrics view when fullscreen for maximum immersion, or accessible)
-                  if (!_isFullScreen || _selectedTab != 1)
-                    _buildSidebar(player, activeIp),
+              // Left Sidebar Navigation (hidden in lyrics view when fullscreen for maximum immersion, or accessible)
+              if (!_isFullScreen || _selectedTab != 1)
+                _buildSidebar(player, activeIp),
 
-                  // Main Center Area
-                  Expanded(
-                    child: Column(
-                      children: [
-                        Expanded(
-                          child: IndexedStack(
-                            index: _selectedTab,
-                            children: [
-                              _buildLibraryView(player),
-                              _buildLyricsView(player),
-                              _buildRemotePairingView(player, serverUrl),
-                            ],
-                          ),
-                        ),
-
-                        // Bottom Persistent Player Bar
-                        _buildPlayerBar(player, song),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-
-              // Floating Exit Fullscreen Button in top right when in Fullscreen
-              if (_isFullScreen)
-                Positioned(
-                  top: 16,
-                  right: 16,
-                  child: Material(
-                    color: Colors.black.withValues(alpha: 0.65),
-                    borderRadius: BorderRadius.circular(20),
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(20),
-                      onTap: _toggleFullScreen,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: Colors.white24),
-                        ),
-                        child: const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.fullscreen_exit, size: 18, color: Colors.white),
-                            SizedBox(width: 6),
-                            Text(
-                              'Exit Full Screen (Esc / F11)',
-                              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
-                            ),
-                          ],
-                        ),
+              // Main Center Area
+              Expanded(
+                child: Column(
+                  children: [
+                    Expanded(
+                      child: IndexedStack(
+                        index: _selectedTab,
+                        children: [
+                          _buildLibraryView(player),
+                          _buildLyricsView(player),
+                          _buildRemotePairingView(player, serverUrl),
+                        ],
                       ),
                     ),
-                  ),
+
+                    // Bottom Persistent Player Bar
+                    _buildPlayerBar(player, song),
+                  ],
                 ),
+              ),
             ],
           ),
         ),
@@ -391,7 +416,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> with WindowLi
             color: isSelected ? Colors.white : Colors.white70,
           ),
         ),
-        onTap: () => setState(() => _selectedTab = index),
+        onTap: () => _switchTab(index),
       ),
     );
   }
@@ -474,6 +499,19 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> with WindowLi
                   ],
                 ),
               ),
+              if (_isFullScreen) ...[
+                OutlinedButton.icon(
+                  onPressed: _toggleFullScreen,
+                  icon: const Icon(Icons.fullscreen_exit, size: 14),
+                  label: const Text('Exit Full Screen (Esc)', style: TextStyle(fontSize: 11)),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Theme.of(context).colorScheme.primary,
+                    side: BorderSide(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.5)),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
               OutlinedButton.icon(
                 onPressed: () => _pickAudioFiles(player),
                 icon: const Icon(Icons.music_note, size: 14),
@@ -943,25 +981,6 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> with WindowLi
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontSize: 10, color: Colors.white54),
                       ),
-                      const SizedBox(height: 2),
-                      // Prominent Timeframe badge
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(4),
-                          border: Border.all(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3)),
-                        ),
-                        child: Text(
-                          '${_formatDuration(player.position)} / ${_formatDuration(player.duration)}',
-                          style: TextStyle(
-                            fontSize: 9,
-                            fontFamily: 'monospace',
-                            fontWeight: FontWeight.bold,
-                            color: Theme.of(context).colorScheme.primary,
-                          ),
-                        ),
-                      ),
                     ],
                   ),
                 ),
@@ -1136,7 +1155,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> with WindowLi
                   size: 19,
                   color: _selectedTab == 1 ? Theme.of(context).colorScheme.primary : Colors.white60,
                 ),
-                onPressed: () => setState(() => _selectedTab = 1),
+                onPressed: () => _switchTab(1),
               ),
               const SizedBox(width: 4),
               IconButton(
@@ -1149,7 +1168,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> with WindowLi
                   size: 19,
                   color: _selectedTab == 2 ? Theme.of(context).colorScheme.primary : Colors.white60,
                 ),
-                onPressed: () => setState(() => _selectedTab = 2),
+                onPressed: () => _switchTab(2),
               ),
               const SizedBox(width: 6),
               // Laptop Master Volume Slider & Mute Toggle

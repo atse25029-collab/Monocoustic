@@ -34,7 +34,7 @@ void main() async {
   // If running on desktop, automatically start the local remote-control server & restore music library
   if (isDesktop) {
     await audioPlayerService.startServer(port: 8080);
-    audioPlayerService.restoreSavedLibrary();
+    await audioPlayerService.restoreSavedSession();
   }
 
   runApp(
