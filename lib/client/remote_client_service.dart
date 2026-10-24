@@ -2,8 +2,10 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
+import '../core/lyrics/lyrics_manager.dart';
 import '../core/models/playback_state.dart';
 import '../core/models/remote_protocol.dart';
+import 'notification_service.dart';
 
 enum ConnectionStatus { disconnected, connecting, connected, error }
 
@@ -22,6 +24,15 @@ class RemoteClientService extends ChangeNotifier {
   // Local sleep timer state for display on remote
   int _sleepTimerMinutes = 0;
 
+  // Real-time smooth position interpolation & zero-latency lyrics synchronization
+  Timer? _smoothTicker;
+  DateTime _lastPositionSyncTime = DateTime.now();
+  int _lastPositionSyncMs = 0;
+
+  // Throttled volume sender to prevent network choking during continuous slider dragging
+  Timer? _volumeThrottleTimer;
+  double? _pendingVolume;
+
   ConnectionStatus get status => _status;
   bool get isConnected => _status == ConnectionStatus.connected;
   String get host => _host;
@@ -29,6 +40,24 @@ class RemoteClientService extends ChangeNotifier {
   String? get errorMessage => _errorMessage;
   PlaybackStateSnapshot get state => _state;
   int get sleepTimerMinutes => _sleepTimerMinutes;
+
+  RemoteClientService() {
+    _initNotificationHandler();
+  }
+
+  void _initNotificationHandler() {
+    RemoteNotificationService.instance.initialize(
+      handler: (actionId) {
+        if (actionId == RemoteNotificationService.actionPlayPause) {
+          togglePlay();
+        } else if (actionId == RemoteNotificationService.actionNext) {
+          next();
+        } else if (actionId == RemoteNotificationService.actionPrev) {
+          previous();
+        }
+      },
+    );
+  }
 
   Future<void> connect(String ipOrHost, {int port = 8080}) async {
     final currentAttempt = ++_connectionAttemptId;
@@ -73,7 +102,9 @@ class RemoteClientService extends ChangeNotifier {
         onDone: () {
           if (currentAttempt == _connectionAttemptId) {
             _status = ConnectionStatus.disconnected;
+            _stopSmoothTicker();
             _safeSetWakelock(false);
+            RemoteNotificationService.instance.cancelNotification();
             notifyListeners();
           }
         },
@@ -81,7 +112,9 @@ class RemoteClientService extends ChangeNotifier {
           if (currentAttempt == _connectionAttemptId) {
             _status = ConnectionStatus.error;
             _errorMessage = 'Connection closed: $e';
+            _stopSmoothTicker();
             _safeSetWakelock(false);
+            RemoteNotificationService.instance.cancelNotification();
             notifyListeners();
           }
         },
@@ -106,6 +139,9 @@ class RemoteClientService extends ChangeNotifier {
       // Enable wakelock when connected so connection isn't throttled in background
       await _safeSetWakelock(true);
 
+      // Start smooth ticker for local zero-latency interpolation
+      _startSmoothTicker();
+
       // Request fresh state immediately
       sendCommand(RemoteProtocol.cmdRequestSync);
     } on TimeoutException {
@@ -114,6 +150,7 @@ class RemoteClientService extends ChangeNotifier {
         _status = ConnectionStatus.error;
         _errorMessage = 'Connection timed out to $_host:$_port. Please verify IP & port and ensure desktop player is running.';
         await _safeSetWakelock(false);
+        RemoteNotificationService.instance.cancelNotification();
         notifyListeners();
       }
     } catch (e) {
@@ -122,12 +159,14 @@ class RemoteClientService extends ChangeNotifier {
         _status = ConnectionStatus.error;
         _errorMessage = 'Could not connect to $_host:$_port ($e)';
         await _safeSetWakelock(false);
+        RemoteNotificationService.instance.cancelNotification();
         notifyListeners();
       }
     }
   }
 
   Future<void> _forceCleanup() async {
+    _stopSmoothTicker();
     try {
       await _subscription?.cancel();
     } catch (_) {}
@@ -149,6 +188,37 @@ class RemoteClientService extends ChangeNotifier {
     } catch (_) {}
   }
 
+  void _startSmoothTicker() {
+    _smoothTicker?.cancel();
+    _smoothTicker = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      if (!_state.isPlaying || !isConnected) return;
+
+      final elapsedMs = DateTime.now().difference(_lastPositionSyncTime).inMilliseconds;
+      final interpolatedMs = _lastPositionSyncMs + elapsedMs;
+
+      final song = _state.currentSong;
+      final newPos = Duration(milliseconds: interpolatedMs);
+
+      int activeLyric = _state.currentLyricIndex;
+      if (song != null && song.lyrics.isNotEmpty) {
+        activeLyric = LyricsManager.findActiveIndex(song.lyrics, newPos);
+      }
+
+      if (newPos != _state.position || activeLyric != _state.currentLyricIndex) {
+        _state = _state.copyWith(
+          position: newPos,
+          currentLyricIndex: activeLyric,
+        );
+        notifyListeners();
+      }
+    });
+  }
+
+  void _stopSmoothTicker() {
+    _smoothTicker?.cancel();
+    _smoothTicker = null;
+  }
+
   void _handleIncomingMessage(dynamic raw) {
     if (raw is! String) return;
     final message = RemoteProtocol.decodeMessage(raw);
@@ -159,17 +229,35 @@ class RemoteClientService extends ChangeNotifier {
 
     if (event == RemoteProtocol.evtFullState && data is Map<String, dynamic>) {
       _state = PlaybackStateSnapshot.fromJson(data);
+      _lastPositionSyncMs = _state.position.inMilliseconds;
+      _lastPositionSyncTime = DateTime.now();
+
       notifyListeners();
+      _syncBackgroundNotification();
     } else if (event == RemoteProtocol.evtPositionTick && data is Map<String, dynamic>) {
       final posMs = data['pos'] as int? ?? 0;
       final lyricIdx = data['lyricIdx'] as int? ?? -1;
+
+      _lastPositionSyncMs = posMs;
+      _lastPositionSyncTime = DateTime.now();
 
       _state = _state.copyWith(
         position: Duration(milliseconds: posMs),
         currentLyricIndex: lyricIdx,
       );
       notifyListeners();
+    } else if (event == 'volume' && data is Map<String, dynamic>) {
+      final vol = (data['volume'] as num?)?.toDouble() ?? _state.volume;
+      _state = _state.copyWith(volume: vol);
+      notifyListeners();
     }
+  }
+
+  void _syncBackgroundNotification() {
+    RemoteNotificationService.instance.updateNotification(
+      state: _state,
+      isConnected: isConnected,
+    );
   }
 
   void sendCommand(String command, [Map<String, dynamic>? data]) {
@@ -180,13 +268,58 @@ class RemoteClientService extends ChangeNotifier {
     } catch (_) {}
   }
 
-  void togglePlay() => sendCommand(RemoteProtocol.cmdTogglePlay);
-  void play() => sendCommand(RemoteProtocol.cmdPlay);
-  void pause() => sendCommand(RemoteProtocol.cmdPause);
+  void togglePlay() {
+    final nextPlaying = !_state.isPlaying;
+    _state = _state.copyWith(isPlaying: nextPlaying);
+    _lastPositionSyncTime = DateTime.now();
+    notifyListeners();
+    _syncBackgroundNotification();
+    sendCommand(RemoteProtocol.cmdTogglePlay);
+  }
+
+  void play() {
+    _state = _state.copyWith(isPlaying: true);
+    _lastPositionSyncTime = DateTime.now();
+    notifyListeners();
+    _syncBackgroundNotification();
+    sendCommand(RemoteProtocol.cmdPlay);
+  }
+
+  void pause() {
+    _state = _state.copyWith(isPlaying: false);
+    notifyListeners();
+    _syncBackgroundNotification();
+    sendCommand(RemoteProtocol.cmdPause);
+  }
+
   void next() => sendCommand(RemoteProtocol.cmdNext);
   void previous() => sendCommand(RemoteProtocol.cmdPrevious);
-  void seek(Duration pos) => sendCommand(RemoteProtocol.cmdSeek, {'positionMs': pos.inMilliseconds});
-  void setVolume(double vol) => sendCommand(RemoteProtocol.cmdSetVolume, {'volume': vol});
+
+  void seek(Duration pos) {
+    _lastPositionSyncMs = pos.inMilliseconds;
+    _lastPositionSyncTime = DateTime.now();
+    _state = _state.copyWith(position: pos);
+    notifyListeners();
+    sendCommand(RemoteProtocol.cmdSeek, {'positionMs': pos.inMilliseconds});
+  }
+
+  /// Sets volume with local instantaneous feedback and throttled network transmission
+  void setVolume(double vol) {
+    final clamped = vol.clamp(0.0, 1.0);
+    _state = _state.copyWith(volume: clamped);
+    notifyListeners();
+
+    _pendingVolume = clamped;
+    if (_volumeThrottleTimer?.isActive ?? false) return;
+
+    _volumeThrottleTimer = Timer(const Duration(milliseconds: 50), () {
+      if (_pendingVolume != null) {
+        sendCommand(RemoteProtocol.cmdSetVolume, {'volume': _pendingVolume!});
+        _pendingVolume = null;
+      }
+    });
+  }
+
   void toggleShuffle() => sendCommand(RemoteProtocol.cmdToggleShuffle);
   void toggleRepeat() => sendCommand(RemoteProtocol.cmdToggleRepeat);
   void jumpToIndex(int index) => sendCommand(RemoteProtocol.cmdJumpToIndex, {'index': index});
@@ -202,6 +335,7 @@ class RemoteClientService extends ChangeNotifier {
     _connectionAttemptId++;
     await _forceCleanup();
     await _safeSetWakelock(false);
+    await RemoteNotificationService.instance.cancelNotification();
     _status = ConnectionStatus.disconnected;
     _errorMessage = null;
     notifyListeners();
@@ -209,8 +343,11 @@ class RemoteClientService extends ChangeNotifier {
 
   @override
   void dispose() {
+    _volumeThrottleTimer?.cancel();
+    _stopSmoothTicker();
     _forceCleanup();
     _safeSetWakelock(false);
+    RemoteNotificationService.instance.cancelNotification();
     super.dispose();
   }
 }

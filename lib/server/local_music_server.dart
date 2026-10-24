@@ -246,5 +246,10 @@ class LocalMusicServer {
     });
   }
 
+  /// Broadcast quick volume change to clients
+  void broadcastVolume(double volume) {
+    broadcastEvent('volume', {'volume': volume});
+  }
+
   int get connectedClientsCount => _clients.length;
 }

@@ -572,17 +572,62 @@ class _RemoteScreenState extends State<RemoteScreen> with SingleTickerProviderSt
                         ),
                       ),
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 14),
+
+                    // Prominent Timeframe and Remaining time indicator
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3)),
+                            ),
+                            child: Text(
+                              'Time: ${_formatDuration(state.position)} / ${_formatDuration(state.duration)}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontFamily: 'monospace',
+                                fontWeight: FontWeight.bold,
+                                color: Theme.of(context).colorScheme.primary,
+                              ),
+                            ),
+                          ),
+                          if (state.duration > state.position)
+                            Text(
+                              '-${_formatDuration(state.duration - state.position)}',
+                              style: const TextStyle(fontSize: 12, fontFamily: 'monospace', color: Colors.white54),
+                            ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
 
                     // Progress bar & Timestamps
                     Row(
                       children: [
-                        Text(_formatDuration(state.position), style: const TextStyle(fontSize: 12, color: Colors.white38)),
+                        SizedBox(
+                          width: 45,
+                          child: Text(
+                            _formatDuration(state.position),
+                            textAlign: TextAlign.right,
+                            style: const TextStyle(fontSize: 12, fontFamily: 'monospace', fontWeight: FontWeight.bold, color: Colors.white70),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
                         Expanded(
                           child: SliderTheme(
                             data: SliderTheme.of(context).copyWith(
-                              trackHeight: 3,
-                              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                              trackHeight: 4,
+                              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+                              overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
+                              activeTrackColor: Theme.of(context).colorScheme.primary,
+                              inactiveTrackColor: Colors.white12,
+                              thumbColor: Colors.white,
                             ),
                             child: Slider(
                               value: state.position.inMilliseconds
@@ -597,7 +642,15 @@ class _RemoteScreenState extends State<RemoteScreen> with SingleTickerProviderSt
                             ),
                           ),
                         ),
-                        Text(_formatDuration(state.duration), style: const TextStyle(fontSize: 12, color: Colors.white38)),
+                        const SizedBox(width: 6),
+                        SizedBox(
+                          width: 45,
+                          child: Text(
+                            _formatDuration(state.duration),
+                            textAlign: TextAlign.left,
+                            style: const TextStyle(fontSize: 12, fontFamily: 'monospace', fontWeight: FontWeight.bold, color: Colors.white70),
+                          ),
+                        ),
                       ],
                     ),
 
@@ -623,6 +676,13 @@ class _RemoteScreenState extends State<RemoteScreen> with SingleTickerProviderSt
                           decoration: BoxDecoration(
                             color: Theme.of(context).colorScheme.primary,
                             shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(
+                                color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.4),
+                                blurRadius: 12,
+                                spreadRadius: 2,
+                              ),
+                            ],
                           ),
                           child: IconButton(
                             icon: Icon(
@@ -651,21 +711,59 @@ class _RemoteScreenState extends State<RemoteScreen> with SingleTickerProviderSt
                         ),
                       ],
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 16),
 
-                    // Volume Slider
-                    Row(
-                      children: [
-                        const Icon(Icons.volume_down, size: 20, color: Colors.white38),
-                        Expanded(
-                          child: Slider(
-                            value: state.volume,
-                            max: 1.0,
-                            onChanged: (val) => client.setVolume(val),
+                    // Laptop Master Volume Slider & Mute Toggle with live percentage
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.04),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: Colors.white10),
+                      ),
+                      child: Row(
+                        children: [
+                          IconButton(
+                            icon: Icon(
+                              state.volume == 0 ? Icons.volume_off : Icons.volume_down,
+                              size: 22,
+                              color: Colors.white70,
+                            ),
+                            onPressed: () {
+                              if (state.volume > 0) {
+                                client.setVolume(0);
+                              } else {
+                                client.setVolume(0.5);
+                              }
+                            },
                           ),
-                        ),
-                        const Icon(Icons.volume_up, size: 20, color: Colors.white38),
-                      ],
+                          Expanded(
+                            child: SliderTheme(
+                              data: SliderTheme.of(context).copyWith(
+                                trackHeight: 4,
+                                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+                                activeTrackColor: Theme.of(context).colorScheme.primary,
+                                inactiveTrackColor: Colors.white12,
+                                thumbColor: Colors.white,
+                              ),
+                              child: Slider(
+                                value: state.volume,
+                                max: 1.0,
+                                onChanged: (val) => client.setVolume(val),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Container(
+                            width: 50,
+                            alignment: Alignment.centerRight,
+                            child: Text(
+                              '${(state.volume * 100).round()}%',
+                              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, fontFamily: 'monospace', color: Colors.white70),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),

@@ -12,6 +12,7 @@ import '../core/models/playback_state.dart';
 import '../core/models/remote_protocol.dart';
 import '../core/models/song.dart';
 import '../server/local_music_server.dart';
+import 'win_volume.dart';
 
 class AudioPlayerService extends ChangeNotifier {
   final AudioPlayer _player = AudioPlayer();
@@ -38,10 +39,24 @@ class AudioPlayerService extends ChangeNotifier {
   StreamSubscription? _durSub;
   StreamSubscription? _stateSub;
   StreamSubscription? _completeSub;
+  Timer? _positionPollingTimer;
 
   AudioPlayerService() {
     _initAudioPlayer();
     _initServer();
+    _initSystemVolume();
+  }
+
+  Future<void> _initSystemVolume() async {
+    if (!kIsWeb && Platform.isWindows) {
+      final sysVol = await WinVolumeHelper.getMasterVolume();
+      if (sysVol != null) {
+        _volume = sysVol;
+        await _player.setVolume(sysVol);
+        notifyListeners();
+        _server.broadcastVolume(_volume);
+      }
+    }
   }
 
   // Getters
@@ -102,14 +117,48 @@ class AudioPlayerService extends ChangeNotifier {
       final playing = (state == PlayerState.playing);
       if (_isPlaying != playing) {
         _isPlaying = playing;
+        if (_isPlaying) {
+          _startPositionPolling();
+        } else {
+          _stopPositionPolling();
+        }
         notifyListeners();
         _server.broadcastFullState(snapshot);
       }
     });
 
     _completeSub = _player.onPlayerComplete.listen((_) {
+      _stopPositionPolling();
       _handleTrackCompleted();
     });
+  }
+
+  void _startPositionPolling() {
+    _positionPollingTimer?.cancel();
+    _positionPollingTimer = Timer.periodic(const Duration(milliseconds: 100), (_) async {
+      if (!_isPlaying) return;
+      try {
+        final pos = await _player.getCurrentPosition();
+        if (pos != null) {
+          _position = pos;
+          final song = currentSong;
+          if (song != null && song.lyrics.isNotEmpty) {
+            final newLyricIdx = LyricsManager.findActiveIndex(song.lyrics, pos);
+            if (newLyricIdx != _currentLyricIndex) {
+              _currentLyricIndex = newLyricIdx;
+              notifyListeners();
+            }
+          }
+          _server.broadcastPosition(pos.inMilliseconds, _currentLyricIndex);
+          notifyListeners();
+        }
+      } catch (_) {}
+    });
+  }
+
+  void _stopPositionPolling() {
+    _positionPollingTimer?.cancel();
+    _positionPollingTimer = null;
   }
 
   void _initServer() {
@@ -424,8 +473,11 @@ class AudioPlayerService extends ChangeNotifier {
   Future<void> setVolume(double val) async {
     _volume = val.clamp(0.0, 1.0);
     await _player.setVolume(_volume);
+    if (!kIsWeb && Platform.isWindows) {
+      await WinVolumeHelper.setMasterVolume(_volume);
+    }
     notifyListeners();
-    _server.broadcastFullState(snapshot);
+    _server.broadcastVolume(_volume);
   }
 
   void toggleShuffle() {
@@ -516,6 +568,7 @@ class AudioPlayerService extends ChangeNotifier {
 
   @override
   void dispose() {
+    _stopPositionPolling();
     _posSub?.cancel();
     _durSub?.cancel();
     _stateSub?.cancel();

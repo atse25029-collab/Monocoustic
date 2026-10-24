@@ -82,52 +82,7 @@ class _MonocousticAppState extends State<MonocousticApp> {
           thumbColor: Color(0xFF9E77FF),
         ),
       ),
-      home: Scaffold(
-        body: Stack(
-          children: [
-            showRemoteScreen ? const RemoteScreen() : const DesktopPlayerScreen(),
-
-            // Convenient mode switcher badge in the corner for testing / development
-            Positioned(
-              top: 12,
-              right: 12,
-              child: Opacity(
-                opacity: 0.75,
-                child: Material(
-                  color: Colors.black54,
-                  borderRadius: BorderRadius.circular(20),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(20),
-                    onTap: () {
-                      setState(() {
-                        _forceRemoteMode = !showRemoteScreen;
-                      });
-                    },
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            showRemoteScreen ? Icons.desktop_windows : Icons.phone_android,
-                            size: 14,
-                            color: Colors.white70,
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            showRemoteScreen ? 'Switch to Desktop' : 'Switch to Remote',
-                            style: const TextStyle(fontSize: 11, color: Colors.white70),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
+      home: showRemoteScreen ? const RemoteScreen() : const DesktopPlayerScreen(),
     );
   }
 }

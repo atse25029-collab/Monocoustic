@@ -18,7 +18,7 @@ class DesktopPlayerScreen extends StatefulWidget {
   State<DesktopPlayerScreen> createState() => _DesktopPlayerScreenState();
 }
 
-class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
+class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> with WindowListener {
   int _selectedTab = 0; // 0: Library, 1: Lyrics, 2: Remote Pairing
   List<NetworkAddressInfo> _networkInterfaces = [];
   int _selectedInterfaceIndex = 0;
@@ -27,8 +27,40 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
   @override
   void initState() {
     super.initState();
+    windowManager.addListener(this);
+    HardwareKeyboard.instance.addHandler(_handleGlobalKeyEvent);
     _initLocalIps();
     _checkInitialFullScreen();
+  }
+
+  @override
+  void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleGlobalKeyEvent);
+    windowManager.removeListener(this);
+    super.dispose();
+  }
+
+  bool _handleGlobalKeyEvent(KeyEvent event) {
+    if (event is KeyDownEvent) {
+      if (event.logicalKey == LogicalKeyboardKey.f11) {
+        _toggleFullScreen();
+        return true;
+      } else if (event.logicalKey == LogicalKeyboardKey.escape && _isFullScreen) {
+        _toggleFullScreen();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  @override
+  void onWindowEnterFullScreen() {
+    if (mounted) setState(() => _isFullScreen = true);
+  }
+
+  @override
+  void onWindowLeaveFullScreen() {
+    if (mounted) setState(() => _isFullScreen = false);
   }
 
   Future<void> _checkInitialFullScreen() async {
@@ -42,9 +74,10 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
     try {
       final isFs = await windowManager.isFullScreen();
       await windowManager.setFullScreen(!isFs);
+      final newFs = await windowManager.isFullScreen();
       if (mounted) {
         setState(() {
-          _isFullScreen = !isFs;
+          _isFullScreen = newFs;
         });
       }
     } catch (_) {}
@@ -129,31 +162,69 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
         autofocus: true,
         child: Scaffold(
           backgroundColor: const Color(0xFF121318),
-          body: Row(
+          body: Stack(
             children: [
-              // Left Sidebar Navigation
-              _buildSidebar(player, activeIp),
+              Row(
+                children: [
+                  // Left Sidebar Navigation (hidden in lyrics view when fullscreen for maximum immersion, or accessible)
+                  if (!_isFullScreen || _selectedTab != 1)
+                    _buildSidebar(player, activeIp),
 
-              // Main Center Area
-              Expanded(
-                child: Column(
-                  children: [
-                    Expanded(
-                      child: IndexedStack(
-                        index: _selectedTab,
-                        children: [
-                          _buildLibraryView(player),
-                          _buildLyricsView(player),
-                          _buildRemotePairingView(player, serverUrl),
-                        ],
+                  // Main Center Area
+                  Expanded(
+                    child: Column(
+                      children: [
+                        Expanded(
+                          child: IndexedStack(
+                            index: _selectedTab,
+                            children: [
+                              _buildLibraryView(player),
+                              _buildLyricsView(player),
+                              _buildRemotePairingView(player, serverUrl),
+                            ],
+                          ),
+                        ),
+
+                        // Bottom Persistent Player Bar
+                        _buildPlayerBar(player, song),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+
+              // Floating Exit Fullscreen Button in top right when in Fullscreen
+              if (_isFullScreen)
+                Positioned(
+                  top: 16,
+                  right: 16,
+                  child: Material(
+                    color: Colors.black.withValues(alpha: 0.65),
+                    borderRadius: BorderRadius.circular(20),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(20),
+                      onTap: _toggleFullScreen,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: Colors.white24),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.fullscreen_exit, size: 18, color: Colors.white),
+                            SizedBox(width: 6),
+                            Text(
+                              'Exit Full Screen (Esc / F11)',
+                              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-
-                    // Bottom Persistent Player Bar
-                    _buildPlayerBar(player, song),
-                  ],
+                  ),
                 ),
-              ),
             ],
           ),
         ),
@@ -814,16 +885,16 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
   Widget _buildPlayerBar(AudioPlayerService player, Song? song) {
     return Container(
       height: 90,
-      padding: const EdgeInsets.symmetric(horizontal: 20),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       decoration: const BoxDecoration(
         color: Color(0xFF16181F),
         border: Border(top: BorderSide(color: Colors.white10)),
       ),
       child: Row(
         children: [
-          // Current Track info
+          // Current Track info & Timeframe badge
           SizedBox(
-            width: 200,
+            width: 210,
             child: Row(
               children: [
                 ClipRRect(
@@ -851,7 +922,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
                           child: const Icon(Icons.music_note, color: Colors.white54, size: 22),
                         ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 10),
                 Expanded(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -861,16 +932,35 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
                         song?.title ?? 'No Track Playing',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white, fontSize: 13),
+                        style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 12),
                       ),
-                      const SizedBox(height: 2),
+                      const SizedBox(height: 1),
                       Text(
                         song != null
                             ? (song.album.isNotEmpty ? '${song.artist} • ${song.album}' : song.artist)
                             : 'Select from library',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 11, color: Colors.white54),
+                        style: const TextStyle(fontSize: 10, color: Colors.white54),
+                      ),
+                      const SizedBox(height: 2),
+                      // Prominent Timeframe badge
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3)),
+                        ),
+                        child: Text(
+                          '${_formatDuration(player.position)} / ${_formatDuration(player.duration)}',
+                          style: TextStyle(
+                            fontSize: 9,
+                            fontFamily: 'monospace',
+                            fontWeight: FontWeight.bold,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
                       ),
                     ],
                   ),
@@ -889,39 +979,53 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     IconButton(
+                      visualDensity: VisualDensity.compact,
                       tooltip: player.isShuffle ? 'Shuffle: On' : 'Shuffle: Off',
                       icon: Icon(
                         Icons.shuffle,
-                        size: 20,
+                        size: 18,
                         color: player.isShuffle ? Theme.of(context).colorScheme.primary : Colors.white38,
                       ),
                       onPressed: player.toggleShuffle,
                     ),
                     IconButton(
+                      visualDensity: VisualDensity.compact,
                       icon: const Icon(Icons.skip_previous, color: Colors.white, size: 22),
                       onPressed: player.previous,
                     ),
                     const SizedBox(width: 4),
                     Container(
+                      width: 38,
+                      height: 38,
                       decoration: BoxDecoration(
                         color: Theme.of(context).colorScheme.primary,
                         shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.4),
+                            blurRadius: 8,
+                            spreadRadius: 1,
+                          ),
+                        ],
                       ),
                       child: IconButton(
+                        padding: EdgeInsets.zero,
                         icon: Icon(
                           player.isPlaying ? Icons.pause : Icons.play_arrow,
                           color: Colors.white,
-                          size: 24,
+                          size: 22,
                         ),
                         onPressed: player.togglePlay,
                       ),
                     ),
                     const SizedBox(width: 4),
                     IconButton(
+                      visualDensity: VisualDensity.compact,
                       icon: const Icon(Icons.skip_next, color: Colors.white, size: 22),
                       onPressed: player.next,
                     ),
                     IconButton(
+                      visualDensity: VisualDensity.compact,
                       tooltip: player.repeatMode == PlaybackRepeatMode.off
                           ? 'Repeat: Off'
                           : (player.repeatMode == PlaybackRepeatMode.all
@@ -931,7 +1035,7 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
                         player.repeatMode == PlaybackRepeatMode.one
                             ? Icons.repeat_one
                             : Icons.repeat,
-                        size: 20,
+                        size: 18,
                         color: player.repeatMode != PlaybackRepeatMode.off
                             ? Theme.of(context).colorScheme.primary
                             : Colors.white38,
@@ -941,31 +1045,63 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
                   ],
                 ),
 
-                // Seek bar
+                // Seek bar with prominent start and end times
                 Row(
                   children: [
-                    Text(_formatDuration(player.position), style: const TextStyle(fontSize: 10, color: Colors.white38)),
-                    Expanded(
-                      child: SliderTheme(
-                        data: SliderTheme.of(context).copyWith(
-                          trackHeight: 2,
-                          thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
-                          overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
-                        ),
-                        child: Slider(
-                          value: player.position.inMilliseconds
-                              .clamp(0, player.duration.inMilliseconds.clamp(1, 999999999))
-                              .toDouble(),
-                          max: player.duration.inMilliseconds > 0
-                              ? player.duration.inMilliseconds.toDouble()
-                              : 1.0,
-                          onChanged: (val) {
-                            player.seek(Duration(milliseconds: val.toInt()));
-                          },
+                    SizedBox(
+                      width: 40,
+                      child: Text(
+                        _formatDuration(player.position),
+                        textAlign: TextAlign.right,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontFamily: 'monospace',
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white70,
                         ),
                       ),
                     ),
-                    Text(_formatDuration(player.duration), style: const TextStyle(fontSize: 10, color: Colors.white38)),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: SizedBox(
+                        height: 22,
+                        child: SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            trackHeight: 3,
+                            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
+                            overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
+                            activeTrackColor: Theme.of(context).colorScheme.primary,
+                            inactiveTrackColor: Colors.white12,
+                            thumbColor: Colors.white,
+                          ),
+                          child: Slider(
+                            value: player.position.inMilliseconds
+                                .clamp(0, player.duration.inMilliseconds.clamp(1, 999999999))
+                                .toDouble(),
+                            max: player.duration.inMilliseconds > 0
+                                ? player.duration.inMilliseconds.toDouble()
+                                : 1.0,
+                            onChanged: (val) {
+                              player.seek(Duration(milliseconds: val.toInt()));
+                            },
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    SizedBox(
+                      width: 40,
+                      child: Text(
+                        _formatDuration(player.duration),
+                        textAlign: TextAlign.left,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontFamily: 'monospace',
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white70,
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ],
@@ -973,59 +1109,102 @@ class _DesktopPlayerScreenState extends State<DesktopPlayerScreen> {
           ),
 
           // Volume & Quick Actions
-          SizedBox(
-            width: 235,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                IconButton(
-                  tooltip: _isFullScreen ? 'Exit Full Screen (F11)' : 'Full Screen (F11)',
-                  icon: Icon(
-                    _isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
-                    size: 22,
-                    color: _isFullScreen ? Theme.of(context).colorScheme.primary : Colors.white60,
-                  ),
-                  onPressed: _toggleFullScreen,
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.all(4),
+                constraints: const BoxConstraints(),
+                tooltip: _isFullScreen ? 'Exit Full Screen (F11 / Esc)' : 'Full Screen (F11)',
+                icon: Icon(
+                  _isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
+                  size: 20,
+                  color: _isFullScreen ? Theme.of(context).colorScheme.primary : Colors.white60,
                 ),
-                IconButton(
-                  tooltip: 'Lyrics View',
-                  icon: Icon(
-                    Icons.subtitles,
-                    size: 20,
-                    color: _selectedTab == 1 ? Theme.of(context).colorScheme.primary : Colors.white60,
-                  ),
-                  onPressed: () => setState(() => _selectedTab = 1),
+                onPressed: _toggleFullScreen,
+              ),
+              const SizedBox(width: 4),
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.all(4),
+                constraints: const BoxConstraints(),
+                tooltip: 'Lyrics Canvas',
+                icon: Icon(
+                  Icons.subtitles,
+                  size: 19,
+                  color: _selectedTab == 1 ? Theme.of(context).colorScheme.primary : Colors.white60,
                 ),
-                IconButton(
-                  tooltip: 'Remote Control QR',
-                  icon: Icon(
-                    Icons.qr_code,
-                    size: 20,
-                    color: _selectedTab == 2 ? Theme.of(context).colorScheme.primary : Colors.white60,
-                  ),
-                  onPressed: () => setState(() => _selectedTab = 2),
+                onPressed: () => setState(() => _selectedTab = 1),
+              ),
+              const SizedBox(width: 4),
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.all(4),
+                constraints: const BoxConstraints(),
+                tooltip: 'Remote Control QR',
+                icon: Icon(
+                  Icons.qr_code,
+                  size: 19,
+                  color: _selectedTab == 2 ? Theme.of(context).colorScheme.primary : Colors.white60,
                 ),
-                Icon(
-                  player.volume == 0 ? Icons.volume_off : Icons.volume_up,
-                  size: 18,
-                  color: Colors.white54,
-                ),
-                SizedBox(
-                  width: 55,
-                  child: SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      trackHeight: 2,
-                      thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 4),
+                onPressed: () => setState(() => _selectedTab = 2),
+              ),
+              const SizedBox(width: 6),
+              // Laptop Master Volume Slider & Mute Toggle
+              Tooltip(
+                message: 'Laptop Master Volume: ${(player.volume * 100).round()}%',
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.all(4),
+                      constraints: const BoxConstraints(),
+                      icon: Icon(
+                        player.volume == 0 ? Icons.volume_off : Icons.volume_up,
+                        size: 18,
+                        color: Colors.white70,
+                      ),
+                      onPressed: () {
+                        if (player.volume > 0) {
+                          player.setVolume(0);
+                        } else {
+                          player.setVolume(0.5);
+                        }
+                      },
                     ),
-                    child: Slider(
-                      value: player.volume,
-                      max: 1.0,
-                      onChanged: (val) => player.setVolume(val),
+                    SizedBox(
+                      width: 60,
+                      height: 22,
+                      child: SliderTheme(
+                        data: SliderTheme.of(context).copyWith(
+                          trackHeight: 2,
+                          thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 4),
+                          overlayShape: const RoundSliderOverlayShape(overlayRadius: 8),
+                          activeTrackColor: Theme.of(context).colorScheme.primary,
+                          inactiveTrackColor: Colors.white12,
+                          thumbColor: Colors.white,
+                        ),
+                        child: Slider(
+                          value: player.volume,
+                          max: 1.0,
+                          onChanged: (val) => player.setVolume(val),
+                        ),
+                      ),
                     ),
-                  ),
+                    SizedBox(
+                      width: 30,
+                      child: Text(
+                        '${(player.volume * 100).round()}%',
+                        style: const TextStyle(fontSize: 10, color: Colors.white54, fontFamily: 'monospace'),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ],
       ),
